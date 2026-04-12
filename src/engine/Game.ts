@@ -1,6 +1,6 @@
 import * as assert from 'assert';
-import { LastLossAttackerSelector, LowestTrumpAttackerSelector } from './Game';
-import { StockFactory, ShuffleStockFactory } from './stock';
+import { LastLossAttackerSelector } from './game/LastLossAttackerSelector';
+import { LowestTrumpAttackerSelector } from './game/LowestTrumpAttackerSelector';
 import { Card, CardDto } from './Card';
 import { Deck } from './Deck';
 import { Hand } from './Hand';
@@ -38,7 +38,6 @@ export interface GameDto {
 
 export class Game {
     private state = GameState.Idle;
-    private stockFactory: StockFactory;
     private stock = new Deck();
     private discard = new Deck();
     private round = new Round();
@@ -54,9 +53,7 @@ export class Game {
     // Initialize with default settings
     private settings: GameSettings = { isPerevodnoy: false, deckSize: 36 };
 
-    constructor(stockFactory: StockFactory = new ShuffleStockFactory()) {
-        this.stockFactory = stockFactory;
-    }
+    constructor() { }
 
     clear(): void {
         this.state = GameState.Idle;
@@ -151,6 +148,7 @@ export class Game {
         }
 
         // DEFENDER LOGIC (UPDATED WITH PEREVODNOY)
+        // DEFENDER LOGIC (UPDATED WITH PEREVODNOY)
         if (this.currentId === this.defenderId) {
             const defenderHand = this.handMap.get(this.defenderId);
             if (!defenderHand.has(card)) return false;
@@ -187,7 +185,11 @@ export class Game {
                 return true;
             }
 
-            this.currentId = this.passerId;
+            // FIXED: Only pass the turn back to the attacker if ALL attack cards are answered!
+            if (this.round.getDefenceCards().length === this.round.getAttackCards().length) {
+                this.currentId = this.passerId;
+            }
+
             return true;
         }
 

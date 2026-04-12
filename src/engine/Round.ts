@@ -49,7 +49,8 @@ export class Round {
     }
 
     defend(defenceCard: Card): boolean {
-        const attackCard = this.attackCards[this.attackCards.length - 1];
+        // FIXED: Target the first undefended card, not just the last one!
+        const attackCard = this.attackCards[this.defenceCards.length];
         if (attackCard === undefined) return false;
 
         const isAttackTrump = attackCard.isSameSuite(this.trumpCard);
