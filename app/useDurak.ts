@@ -136,9 +136,17 @@ export function useDurak(settings: any) {
     }, [gameState, settings.autoPlay, settings.difficulty, isHalted]);
 
     const playCard = (cardDto: any) => {
-        if (gameState.currentId !== HUMAN_ID || settings.autoPlay || isHalted) return;
+        if (gameState.currentId !== HUMAN_ID || settings.autoPlay || isHalted) return false;
+
         const card = new Card(cardDto.suite, cardDto.rank);
-        if (gameRef.current.act(card)) setGameState(gameRef.current.toObject());
+        const success = gameRef.current.act(card);
+
+        if (success) {
+            setGameState(gameRef.current.toObject());
+            return true; // TELL THE UI IT WORKED
+        }
+
+        return false; // TELL THE UI IT FAILED!
     };
 
     const passOrTake = () => {

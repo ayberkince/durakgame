@@ -1,21 +1,30 @@
 "use client";
-import React from 'react';
+import React, { useState } from 'react';
 import { useDurak } from './useDurak';
-import { formatCard } from './utils';
+import PlayingCard from './PlayingCard'; // <-- Import our new component!
 
 export default function GameBoard({ settings, onLeave }: { settings: any, onLeave: () => void }) {
-    // 🛠️ THE FIX IS HERE: We are now grabbing 'report' and 'autoPlay' from the hook!
     const { game, gameState, playCard, passOrTake, HUMAN_ID, report, autoPlay } = useDurak(settings);
+    const [shakingCardIndex, setShakingCardIndex] = useState<number | null>(null);
 
     if (!gameState) return <div className="text-white text-center p-10">Dealing cards...</div>;
 
-    const humanPlayer = game.getPlayers().find(p => p.getId() === HUMAN_ID);
-    const myHand = humanPlayer ? game.getPlayerHand(humanPlayer).toObject().cards : [];
-    const bots = game.getPlayers().filter(p => p.getId() !== HUMAN_ID);
     const isMyTurn = gameState.currentId === HUMAN_ID;
-
-    // Is the game completely over? (State 4 = Ended)
     const isGameOver = gameState.state === 4;
+    const isDefending = gameState.currentId === gameState.defenderId;
+
+    const humanPlayer = game.getPlayers().find(p => p.getId() === HUMAN_ID);
+    const myHandRaw = humanPlayer ? game.getPlayerHand(humanPlayer).toObject().cards : [];
+
+    const myHand = [...myHandRaw].sort((a, b) => {
+        const aIsTrump = a.suite === gameState.trumpCard?.suite;
+        const bIsTrump = b.suite === gameState.trumpCard?.suite;
+        if (aIsTrump && !bIsTrump) return 1;
+        if (!aIsTrump && bIsTrump) return -1;
+        return a.rank - b.rank;
+    });
+
+    const bots = game.getPlayers().filter(p => p.getId() !== HUMAN_ID);
 
     const getOpponentStyle = (index: number, totalBots: number) => {
         const startAngle = Math.PI * 0.9;
@@ -29,24 +38,40 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
         };
     };
 
-    const isDefending = gameState.currentId === gameState.defenderId;
+    const handleCardClick = (card: any, index: number) => {
+        const success = playCard(card);
+        if (!success && isMyTurn) {
+            setShakingCardIndex(index);
+            setTimeout(() => setShakingCardIndex(null), 400);
+        }
+    };
 
     return (
         <div className="flex flex-col h-full gap-4 relative">
+            <style>{`
+                @keyframes error-shake {
+                    0%, 100% { transform: translateX(0) scale(1.1); filter: hue-rotate(300deg) saturate(200%); }
+                    25% { transform: translateX(-8px) scale(1.1) rotate(-5deg); }
+                    50% { transform: translateX(8px) scale(1.1) rotate(5deg); }
+                    75% { transform: translateX(-8px) scale(1.1) rotate(-5deg); }
+                }
+                .animate-error-shake {
+                    animation: error-shake 0.4s ease-in-out;
+                    z-index: 50;
+                }
+            `}</style>
 
-            {/* 🤖 DIAGNOSTIC REPORT PANEL (Only shows in AutoPlay mode) */}
+            {/* Diagnostic Log */}
             {autoPlay && report && (
                 <div className="absolute top-16 left-0 right-0 z-40 bg-black/90 p-4 rounded-xl border border-red-500/50 max-h-48 overflow-y-auto text-xs font-mono pointer-events-none">
                     <h3 className="text-red-400 font-bold mb-2">⚙️ DIAGNOSTIC LOG</h3>
                     {report.slice(-10).map((log, i) => (
-                        <div key={i} className={log.includes("ERROR") ? "text-red-500 font-bold" : "text-green-300/70"}>
-                            {log}
-                        </div>
+                        <div key={i} className={log.includes("ERROR") ? "text-red-500 font-bold" : "text-green-300/70"}>{log}</div>
                     ))}
                 </div>
             )}
 
-            {/* GAME OVER OVERLAY */}
+            {/* Game Over Screen */}
             {isGameOver && (
                 <div className="absolute inset-0 z-50 bg-black/80 rounded-xl flex flex-col items-center justify-center p-6 text-center backdrop-blur-sm">
                     <h2 className="text-4xl font-extrabold text-white mb-4">GAME OVER</h2>
@@ -61,6 +86,7 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                 </div>
             )}
 
+            {/* Top Info Bar */}
             <div className="flex justify-between items-center text-xs text-slate-400">
                 <span>Cards left: {gameState.stockCount}</span>
                 <span className={isMyTurn && !isGameOver ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
@@ -68,9 +94,10 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                 </span>
             </div>
 
+            {/* The Green Felt Table */}
             <div className="bg-emerald-800 flex-grow rounded-xl border-4 border-emerald-900 p-4 relative shadow-[inset_0_0_50px_rgba(0,0,0,0.5)] flex flex-col justify-between overflow-hidden">
 
-                {/* Opponents */}
+                {/* Opponents Hands */}
                 {bots.map((bot, index) => {
                     const botHandSize = game.getPlayerHand(bot).size();
                     const isActive = gameState.currentId === bot.getId() && !isGameOver;
@@ -81,9 +108,9 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                             <span className={`text-xs mb-1 font-bold bg-black/40 px-2 py-0.5 rounded-full ${isActive ? 'text-green-300 scale-110 shadow-[0_0_10px_rgba(74,222,128,0.5)]' : 'text-slate-300'}`}>
                                 {bot.getName()}
                             </span>
-                            <div className="flex -space-x-6">
+                            <div className="flex -space-x-12 sm:-space-x-14">
                                 {Array.from({ length: botHandSize }).map((_, i) => (
-                                    <div key={i} className={`w-10 h-14 bg-blue-900 rounded-sm shadow-md border border-blue-300 ${isActive ? '-translate-y-2' : ''} transition-transform`} />
+                                    <PlayingCard key={i} isFaceDown className={`w-[45px] h-[65px] ${isActive ? '-translate-y-2' : ''}`} />
                                 ))}
                             </div>
                         </div>
@@ -98,31 +125,33 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                         {gameState.round.attackCards.map((attackCard: any, i: number) => {
                             const defenseCard = gameState.round.defenceCards[i];
                             return (
-                                <div key={i} className="relative w-16 h-24">
-                                    <div className="w-16 h-24 bg-white rounded-md shadow-xl border border-gray-300 flex items-center justify-center text-black font-bold absolute top-0 left-0 text-xl">
-                                        {formatCard(attackCard)}
-                                    </div>
+                                <div key={i} className="relative w-[70px] h-[100px]">
+                                    {/* Attack Card */}
+                                    <PlayingCard card={attackCard} className="absolute top-0 left-0" />
+
+                                    {/* Defense Card Overlay */}
                                     {defenseCard && (
-                                        <div className="w-16 h-24 bg-slate-100 rounded-md shadow-[5px_5px_15px_rgba(0,0,0,0.4)] border border-gray-400 flex items-center justify-center text-black font-bold absolute top-4 left-4 z-10 text-xl">
-                                            {formatCard(defenseCard)}
-                                        </div>
+                                        <PlayingCard card={defenseCard} className="absolute top-4 left-4 z-10 shadow-[5px_5px_15px_rgba(0,0,0,0.6)]" />
                                     )}
                                 </div>
                             );
                         })}
                     </div>
 
-                    {/* Trump & Deck */}
+                    {/* Trump & Deck / Pass Actions */}
                     <div className="flex justify-center items-center relative h-24 w-40 mt-8 pointer-events-auto">
                         {gameState.stockCount > 0 ? (
                             <>
-                                <div className="w-16 h-24 bg-white rounded-md shadow-lg flex items-center justify-center -rotate-90 absolute left-2 text-black font-extrabold text-2xl z-0 border border-gray-300">
-                                    {formatCard(gameState.trumpCard)}
-                                </div>
-                                <div className="w-16 h-24 bg-blue-900 rounded-md shadow-[5px_5px_15px_rgba(0,0,0,0.6)] border-2 border-blue-300 absolute right-6 z-10 flex items-center justify-center cursor-pointer hover:-translate-y-2 transition-all" onClick={passOrTake}>
-                                    <span className="text-blue-300 font-bold text-xs text-center leading-tight">
+                                {/* Face-up Trump Card */}
+                                <PlayingCard card={gameState.trumpCard} className="-rotate-90 absolute left-2 z-0" />
+
+                                {/* Deck Stack */}
+                                <div className="absolute right-6 z-10 flex flex-col items-center group cursor-pointer hover:-translate-y-2 transition-all" onClick={passOrTake}>
+                                    <PlayingCard isFaceDown />
+                                    {/* Action Label Overlay */}
+                                    <div className="absolute -bottom-3 bg-blue-900 text-blue-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-blue-400 group-hover:bg-blue-600 group-hover:text-white">
                                         {isDefending ? "TAKE" : "PASS"}
-                                    </span>
+                                    </div>
                                 </div>
                             </>
                         ) : (
@@ -134,15 +163,17 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                 </div>
 
                 {/* Your Hand */}
-                <div className="flex justify-center -mb-2 min-h-[6rem] flex-wrap z-30">
-                    {myHand.map((card: any, i: number) => (
-                        <div
-                            key={i}
-                            onClick={() => playCard(card)}
-                            className="w-16 h-24 bg-white rounded-md shadow-xl border border-gray-300 -ml-6 first:ml-0 flex items-center justify-center cursor-pointer hover:-translate-y-6 hover:z-50 transition-all text-black font-bold text-lg"
-                        >
-                            {formatCard(card)}
-                        </div>
+                <div className="flex justify-center -mb-4 min-h-[6rem] flex-wrap z-30 transition-opacity duration-300">
+                    {myHand.map((card: any, index: number) => (
+                        <PlayingCard
+                            key={`${card.suite}-${card.rank}`}
+                            card={card}
+                            interactive={isMyTurn}
+                            isDimmed={!isMyTurn}
+                            isShaking={shakingCardIndex === index}
+                            onClick={() => handleCardClick(card, index)}
+                            className="-ml-8 first:ml-0 shadow-[0_0_20px_rgba(0,0,0,0.4)]"
+                        />
                     ))}
                 </div>
             </div>
