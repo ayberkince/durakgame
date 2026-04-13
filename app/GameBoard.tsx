@@ -45,11 +45,22 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
         };
     };
 
-    // Handle invalid moves
+    // Haptic engine trigger
+    const triggerHaptic = (pattern: number | number[]) => {
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+            navigator.vibrate(pattern);
+        }
+    };
+
+    // Handle play and vibrate
     const handleCardClick = (card: any, index: number) => {
         const success = playCard(card);
-        if (!success && isMyTurn) {
+        if (success) {
+            triggerHaptic(15); // A crisp, light snap for a successful play!
+            // Note: In the future, you can also trigger an HTML5 Audio object here for a "whoosh" sound.
+        } else if (isMyTurn) {
             setShakingCardIndex(index);
+            triggerHaptic([50, 50, 50]); // A heavy, stuttering buzz for an error!
         }
     };
 
