@@ -6,8 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint .",
-    "clean": "next clean"
+    "lint": "next lint",
+    "server": "nodemon --watch server --watch src -e ts,tsx --exec ts-node server/index.ts"
   },
   "dependencies": {
     "@google/genai": "^1.17.0",
@@ -26,11 +26,13 @@
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.11",
     "@tailwindcss/typography": "^0.5.19",
+    "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^20.19.39",
     "@types/react": "^19",
@@ -61,4 +63,12 @@
     "url": "https://github.com/ayberkince/durakgame/issues"
   },
   "homepage": "https://github.com/ayberkince/durakgame#readme"
+}
+
+"scripts": {
+  "dev": "next dev",
+  "build": "next build",
+  "start": "next start",
+  "lint": "next lint",
+  "server": "nodemon --watch server --watch src -e ts,tsx --exec ts-node server/index.ts"
 }
