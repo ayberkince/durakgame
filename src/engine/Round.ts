@@ -7,12 +7,12 @@ export interface RoundDto {
 }
 
 export class Round {
-    private trumpCard: Card = null;
+    private trumpCard: Card | null = null;
     private attackCards: Card[] = [];
     private defenceCards: Card[] = [];
     private maxCards: number = config.ROUND_MAX_CARDS;
 
-    reset(trumpCard: Card, maxCards: number): void {
+    reset(trumpCard: Card | null, maxCards: number): void {
         this.trumpCard = trumpCard;
         this.attackCards = [];
         this.defenceCards = [];
@@ -53,8 +53,8 @@ export class Round {
         const attackCard = this.attackCards[this.defenceCards.length];
         if (attackCard === undefined) return false;
 
-        const isAttackTrump = attackCard.isSameSuite(this.trumpCard);
-        const isDefenceTrump = defenceCard.isSameSuite(this.trumpCard);
+        const isAttackTrump = this.trumpCard ? attackCard.isSameSuite(this.trumpCard) : false;
+        const isDefenceTrump = this.trumpCard ? defenceCard.isSameSuite(this.trumpCard) : false;
         const isDefenceHigherRank = defenceCard.isHigherRankThan(attackCard);
         const areSameSuite = defenceCard.isSameSuite(attackCard);
 

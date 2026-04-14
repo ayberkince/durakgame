@@ -1,4 +1,4 @@
-import * as assert from 'assert';
+import assert from 'assert';
 import { LastLossAttackerSelector } from './game/LastLossAttackerSelector';
 import { LowestTrumpAttackerSelector } from './game/LowestTrumpAttackerSelector';
 import { Card, CardDto } from './Card';
@@ -26,7 +26,7 @@ export interface GameSettings {
 export interface GameDto {
     players: PlayerDto[];
     state: number;
-    trumpCard: CardDto;
+    trumpCard: CardDto | null;
     stockCount: number;
     discardCount: number;
     attackerId: number;
@@ -41,7 +41,7 @@ export class Game {
     private stock = new Deck();
     private discard = new Deck();
     private round = new Round();
-    private trumpCard: Card = null;
+    private trumpCard: Card | null = null;
     private playerList = new PlayerList();
     private handMap: Map<number, Hand> = new Map();
     private passMap: Map<number, boolean> = new Map();
@@ -124,7 +124,7 @@ export class Game {
         if (this.currentId === this.attackerId || this.currentId === this.passerId) {
             if (this.state === GameState.Attack) {
                 const attackerHand = this.handMap.get(this.currentId);
-                if (!attackerHand.has(card)) return false;
+                if (!attackerHand || !attackerHand.has(card)) return false;
 
                 const hasAttacked = this.round.attack(card);
                 if (!hasAttacked) return false;
@@ -137,7 +137,7 @@ export class Game {
 
             if (this.state === GameState.Take) {
                 const passerHand = this.handMap.get(this.currentId);
-                if (!passerHand.has(card)) return false;
+                if (!passerHand || !passerHand.has(card)) return false;
 
                 const hasAttacked = this.round.attack(card);
                 if (!hasAttacked) return false;
@@ -151,7 +151,7 @@ export class Game {
         // DEFENDER LOGIC (UPDATED WITH PEREVODNOY)
         if (this.currentId === this.defenderId) {
             const defenderHand = this.handMap.get(this.defenderId);
-            if (!defenderHand.has(card)) return false;
+            if (!defenderHand || !defenderHand.has(card)) return false;
 
             // Transfer Check
             if (this.settings.isPerevodnoy) {
@@ -160,7 +160,7 @@ export class Game {
                     const nextPlayerHand = this.handMap.get(nextPlayerId);
                     const totalAttackCards = this.round.getAttackCards().length + 1;
 
-                    if (nextPlayerHand.size() >= totalAttackCards) {
+                    if (nextPlayerHand && nextPlayerHand.size() >= totalAttackCards) {
                         this.round.transferAttack(card);
                         defenderHand.remove(card);
 
@@ -257,6 +257,7 @@ export class Game {
 
     private takeDefenceCards(): void {
         const hand = this.handMap.get(this.defenderId);
+        if (!hand) return;
         hand.push(...this.round.getAttackCards());
         hand.push(...this.round.getDefenceCards());
     }
@@ -299,15 +300,19 @@ export class Game {
             }
 
             const hand = this.handMap.get(attackerId);
-            const fillCards = this.stock.takeBack(hand.tillFullCount());
-            hand.push(...fillCards);
+            if (hand) {
+                const fillCards = this.stock.takeBack(hand.tillFullCount());
+                hand.push(...fillCards);
+            }
 
             attackerId = this.getNextPlayerId(attackerId);
         });
 
         const defenderHand = this.handMap.get(this.defenderId);
-        const defenderFillCards = this.stock.takeBack(defenderHand.tillFullCount());
-        defenderHand.push(...defenderFillCards);
+        if (defenderHand) {
+            const defenderFillCards = this.stock.takeBack(defenderHand.tillFullCount());
+            defenderHand.push(...defenderFillCards);
+        }
     }
 
     private resetRound(): boolean {
@@ -354,7 +359,7 @@ export class Game {
         this.currentId = this.attackerId;
     }
 
-    private updatePasserId(passerId): void {
+    private updatePasserId(passerId: number): void {
         this.passerId = passerId;
         this.currentId = this.passerId;
     }
@@ -397,10 +402,10 @@ export class Game {
     getPlayerHand(player: Player): Hand {
         const id = player.getId();
         if (!this.handMap.has(id)) return new Hand();
-        return this.handMap.get(id);
+        return this.handMap.get(id)!;
     }
 
-    getTrumpCard(): Card {
+    getTrumpCard(): Card | null {
         return this.trumpCard;
     }
 
@@ -416,7 +421,7 @@ export class Game {
         return {
             players: this.playerList.players().map((player) => player.toObject()),
             state: this.state,
-            trumpCard: this.trumpCard?.toObject(),
+            trumpCard: this.trumpCard?.toObject() ?? null,
             stockCount: this.stock.size(),
             discardCount: this.discard.size(),
             attackerId: this.attackerId,

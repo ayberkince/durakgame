@@ -1,19 +1,66 @@
 "use client";
 import React, { useState } from 'react';
+import { socket } from './socket';
 
 export default function CreateGame({ onStart }: { onStart: (settings: any) => void }) {
+    // Mode can be 'single' (AI Bots) or 'multi' (Human Lobby)
+    const [mode, setMode] = useState<'single' | 'multi'>('single');
     const [players, setPlayers] = useState(2);
     const [deckSize, setDeckSize] = useState(36);
     const [isPerevodnoy, setIsPerevodnoy] = useState(false);
     const [difficulty, setDifficulty] = useState('medium');
     const [autoPlay, setAutoPlay] = useState(false);
 
+    const handleCreateRoom = () => {
+        const settings = {
+            mode,
+            players,
+            deckSize,
+            isPerevodnoy,
+            difficulty,
+            autoPlay
+        };
+
+        socket.emit('create_room', settings, (response: any) => {
+            if (response.success) {
+                if (mode === 'single') {
+                    // Start immediately!
+                    onStart({ ...settings, roomId: response.roomId });
+                } else {
+                    // Go to Lobby to wait for humans
+                    onStart('go_to_lobby');
+                }
+            }
+        });
+    };
+
     return (
         <div className="flex flex-col gap-6">
 
+            {/* GAME MODE SELECTOR */}
+            <div className="space-y-3">
+                <h2 className="text-[10px] tracking-widest text-zinc-500 uppercase font-semibold">Match Type</h2>
+                <div className="flex bg-zinc-900/50 p-1 rounded-xl border border-white/5 shadow-inner">
+                    <button
+                        onClick={() => setMode('single')}
+                        className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-300 flex items-center justify-center gap-2 ${mode === 'single' ? 'bg-zinc-800 text-white shadow-md ring-1 ring-white/10' : 'text-zinc-600 hover:text-zinc-400'}`}
+                    >
+                        <span>🤖</span> Single
+                    </button>
+                    <button
+                        onClick={() => setMode('multi')}
+                        className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider rounded-lg transition-all duration-300 flex items-center justify-center gap-2 ${mode === 'multi' ? 'bg-zinc-800 text-white shadow-md ring-1 ring-white/10' : 'text-zinc-600 hover:text-zinc-400'}`}
+                    >
+                        <span>🌐</span> Multi
+                    </button>
+                </div>
+            </div>
+
             {/* Players Control */}
             <div className="space-y-3">
-                <h2 className="text-[10px] tracking-widest text-zinc-500 uppercase font-semibold">Seat Count</h2>
+                <h2 className="text-[10px] tracking-widest text-zinc-500 uppercase font-semibold">
+                    {mode === 'single' ? 'Seat Count (You + Bots)' : 'Seat Count (Humans)'}
+                </h2>
                 <div className="flex bg-zinc-900/50 p-1 rounded-xl border border-white/5 shadow-inner">
                     {[2, 3, 4, 5, 6].map(num => (
                         <button key={num} onClick={() => setPlayers(num)}
@@ -56,12 +103,12 @@ export default function CreateGame({ onStart }: { onStart: (settings: any) => vo
                     <h2 className="text-[10px] tracking-widest text-zinc-500 uppercase font-semibold">Ruleset</h2>
                     <div className="flex flex-col bg-zinc-900/50 p-1 rounded-xl border border-white/5 shadow-inner h-full">
                         <button onClick={() => setIsPerevodnoy(false)}
-                            className={`flex-1 py-2 flex flex-col items-center justify-center gap-1 rounded-lg transition-all duration-300 ${!isPerevodnoy ? 'bg-zinc-800 text-white shadow-md ring-1 ring-white/10' : 'text-zinc-500 hover:text-zinc-300'}`}
+                            className={`flex-1 py-2 flex flex-col items-center justify-center gap-1 rounded-lg transition-all duration-300 ${!isPerevodnoy ? 'bg-zinc-800 text-white shadow-md ring-1 ring-white/10' : 'text-zinc-600 hover:text-zinc-400'}`}
                         >
-                            <span className="text-[10px] tracking-wider uppercase">Throw-In</span>
+                            <span className="text-[10px] tracking-wider uppercase">Standard</span>
                         </button>
                         <button onClick={() => setIsPerevodnoy(true)}
-                            className={`flex-1 py-2 flex flex-col items-center justify-center gap-1 rounded-lg transition-all duration-300 ${isPerevodnoy ? 'bg-zinc-800 text-white shadow-md ring-1 ring-white/10' : 'text-zinc-500 hover:text-zinc-300'}`}
+                            className={`flex-1 py-2 flex flex-col items-center justify-center gap-1 rounded-lg transition-all duration-300 ${isPerevodnoy ? 'bg-zinc-800 text-white shadow-md ring-1 ring-white/10' : 'text-zinc-600 hover:text-zinc-400'}`}
                         >
                             <span className="text-[10px] tracking-wider uppercase">Transfer</span>
                         </button>
@@ -69,7 +116,6 @@ export default function CreateGame({ onStart }: { onStart: (settings: any) => vo
                 </div>
             </div>
 
-            {/* Auto-Tester Toggle */}
             <div className="bg-zinc-900/30 p-4 rounded-2xl border border-white/5 flex justify-between items-center mt-2">
                 <div>
                     <h2 className="text-xs font-bold text-zinc-300 tracking-wide">QA Auto-Tester</h2>
@@ -83,14 +129,16 @@ export default function CreateGame({ onStart }: { onStart: (settings: any) => vo
                 </button>
             </div>
 
-            {/* Luxury Start Button */}
+            {/* INITIALIZE BUTTON */}
             <button
-                onClick={() => onStart({ players, deckSize, isPerevodnoy, difficulty, autoPlay })}
+                onClick={handleCreateRoom}
                 className="mt-4 relative group overflow-hidden rounded-2xl transition-all active:scale-95"
             >
                 <div className="absolute inset-0 bg-gradient-to-r from-amber-600 via-yellow-500 to-amber-600 opacity-80 group-hover:opacity-100 transition-opacity"></div>
                 <div className="relative px-6 py-5 flex items-center justify-center gap-3">
-                    <span className="text-black font-extrabold tracking-[0.2em] uppercase text-sm">Initialize Game</span>
+                    <span className="text-black font-extrabold tracking-[0.2em] uppercase text-sm">
+                        {mode === 'single' ? 'Start Match' : 'Open Table'}
+                    </span>
                     <svg className="w-5 h-5 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
                 </div>
             </button>

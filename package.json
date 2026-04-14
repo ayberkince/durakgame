@@ -64,11 +64,3 @@
   },
   "homepage": "https://github.com/ayberkince/durakgame#readme"
 }
-
-"scripts": {
-  "dev": "next dev",
-  "build": "next build",
-  "start": "next start",
-  "lint": "next lint",
-  "server": "nodemon --watch server --watch src -e ts,tsx --exec ts-node server/index.ts"
-}
