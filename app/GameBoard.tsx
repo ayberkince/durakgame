@@ -6,15 +6,17 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const getSuitSymbol = (suite: number) => ['♣️', '♦️', '♥️', '♠️'][suite - 1] || '?';
 const isRedSuit = (suite: number) => suite === 2 || suite === 3;
+const EMOJIS = ['👋', '😂', '🤡', '💰', '🃏', '😡', '🤐', '🤝'];
 
 export default function GameBoard({ settings, onLeave }: { settings: any, onLeave: () => void }) {
-    const { gameState, playCard, passOrTake, HUMAN_ID } = useDurak(settings);
+    // Extract everything from our network-aware hook
+    const { gameState, playCard, passOrTake, HUMAN_ID, sendEmoji, activeEmojis } = useDurak(settings);
     const [shakingCardIndex, setShakingCardIndex] = useState<number | null>(null);
 
     if (!gameState || HUMAN_ID === null) return (
         <div className="flex flex-col items-center justify-center h-full gap-4 text-center p-10">
             <div className="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-zinc-300 font-bold uppercase tracking-widest text-sm animate-pulse">Waiting for table to fill...</p>
+            <p className="text-zinc-300 font-bold uppercase tracking-widest text-sm animate-pulse">Waiting for table...</p>
         </div>
     );
 
@@ -33,22 +35,13 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
 
     const bots = gameState.players.filter((p: any) => p.id !== HUMAN_ID);
 
-    // FIX 1: Safer Opponent Positioning
     const getOpponentStyle = (index: number, totalBots: number) => {
-        // If it's a 1v1 match, pin them safely near the top inside the green board
-        if (totalBots === 1) {
-            return { top: '15%', left: '50%', transform: 'translate(-50%, -50%)' };
-        }
-        // If >1 opponents, create a flatter arc so they don't clip the top
+        if (totalBots === 1) return { top: '15%', left: '50%', transform: 'translate(-50%, -50%)' };
         const startAngle = Math.PI * 0.85;
         const endAngle = Math.PI * 0.15;
         let angle = startAngle - (index * (startAngle - endAngle) / (totalBots - 1));
         const rx = 40, ry = 25, cx = 50, cy = 40;
-        return {
-            top: `${cy - ry * Math.sin(angle)}%`,
-            left: `${cx + rx * Math.cos(angle)}%`,
-            transform: 'translate(-50%, -50%)'
-        };
+        return { top: `${cy - ry * Math.sin(angle)}%`, left: `${cx + rx * Math.cos(angle)}%`, transform: 'translate(-50%, -50%)' };
     };
 
     const triggerHaptic = (pattern: number | number[]) => {
@@ -74,28 +67,18 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                     50% { transform: translate3d(8px, 0, 0) scale(1.1) rotate(3deg); }
                     75% { transform: translate3d(-8px, 0, 0) scale(1.1) rotate(-3deg); }
                 }
-                .animate-error-shake {
-                    animation: error-shake-smooth 0.4s ease-in-out;
-                    z-index: 50; 
-                }
+                .animate-error-shake { animation: error-shake-smooth 0.4s ease-in-out; z-index: 50; }
             `}</style>
 
+            {/* Game Over Screen */}
             <AnimatePresence>
                 {isGameOver && (
-                    <motion.div
-                        initial={{ opacity: 0, scale: 0.8 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className="absolute inset-0 z-50 bg-black/80 rounded-xl flex flex-col items-center justify-center p-6 text-center backdrop-blur-sm"
-                    >
+                    <motion.div initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} className="absolute inset-0 z-50 bg-black/80 rounded-xl flex flex-col items-center justify-center p-6 text-center backdrop-blur-sm">
                         <h2 className="text-4xl font-extrabold text-white mb-4">GAME OVER</h2>
                         <p className="text-xl text-slate-300 mb-8">
-                            {gameState.players.length === 1 && gameState.players[0].id === HUMAN_ID
-                                ? "🤡 You are the Durak! (You Lost)"
-                                : "🏆 You escaped! (You Won)"}
+                            {gameState.players.length === 1 && gameState.players[0].id === HUMAN_ID ? "🤡 You are the Durak!" : "🏆 You escaped!"}
                         </p>
-                        <button onClick={onLeave} className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-bold py-3 px-8 rounded-xl shadow-lg hover:scale-105 transition-transform">
-                            Return to Lobby
-                        </button>
+                        <button onClick={onLeave} className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white font-bold py-3 px-8 rounded-xl shadow-lg hover:scale-105 transition-transform">Return to Lobby</button>
                     </motion.div>
                 )}
             </AnimatePresence>
@@ -103,13 +86,11 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
             {/* Top Info Bar */}
             <div className="flex justify-between items-center text-xs text-slate-400 z-10 mb-1 px-1">
                 <div className="flex items-center gap-3">
-                    <span className="font-semibold">Cards left: {gameState.stockCount}</span>
+                    <span className="font-semibold">Stock: {gameState.stockCount}</span>
                     {gameState.trumpCard && (
                         <div className="flex items-center gap-1 bg-black/40 px-2 py-1 rounded-md border border-slate-600 shadow-sm">
                             <span className="font-bold text-slate-300">Trump:</span>
-                            <span className={`text-base leading-none ${isRedSuit(gameState.trumpCard.suite) ? 'text-red-500' : 'text-slate-100'}`}>
-                                {getSuitSymbol(gameState.trumpCard.suite)}
-                            </span>
+                            <span className={`text-base leading-none ${isRedSuit(gameState.trumpCard.suite) ? 'text-red-500' : 'text-slate-100'}`}>{getSuitSymbol(gameState.trumpCard.suite)}</span>
                         </div>
                     )}
                 </div>
@@ -121,6 +102,7 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
             {/* The Green Felt Table */}
             <div className="bg-emerald-800 flex-grow rounded-xl border-4 border-emerald-900 p-4 relative shadow-[inset_0_0_50px_rgba(0,0,0,0.5)] flex flex-col justify-between">
 
+                {/* Opponents and their Emojis */}
                 {bots.map((bot: any, index: number) => {
                     const botHandSize = gameState.hands ? gameState.hands[bot.id]?.length || 0 : 0;
                     const isActive = gameState.currentId === bot.id && !isGameOver;
@@ -128,52 +110,40 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
 
                     return (
                         <div key={bot.id} className="absolute flex flex-col items-center z-10 transition-all duration-500" style={getOpponentStyle(index, bots.length)}>
-                            <span className={`text-[10px] mb-2 font-bold bg-black/50 px-3 py-1 rounded-full ${isActive ? 'text-green-300 scale-110 shadow-[0_0_10px_rgba(74,222,128,0.5)]' : 'text-slate-300'}`}>
-                                {bot.name}
-                            </span>
-                            <div className="flex -space-x-10 sm:-space-x-12">
+                            <div className="relative">
+                                <span className={`text-[10px] mb-2 font-bold bg-black/50 px-3 py-1 rounded-full flex items-center transition-all ${isActive ? 'text-green-300 scale-110 shadow-[0_0_10px_rgba(74,222,128,0.5)]' : 'text-slate-300'}`}>
+                                    {bot.name}
+                                </span>
+                                {/* FLOATING EMOJI FOR BOTS */}
                                 <AnimatePresence>
-                                    {Array.from({ length: botHandSize }).map((_, i) => (
-                                        <PlayingCard
-                                            key={`${bot.id}-card-${i}`}
-                                            isFaceDown
-                                            layout
-                                            initial={{ opacity: 0, y: -20 }}
-                                            animate={{ opacity: 1, y: isActive ? -8 : 0 }}
-                                            exit={{ opacity: 0, y: 50, scale: 0.5 }}
-                                            className="w-[45px] h-[65px]"
-                                        />
-                                    ))}
+                                    {activeEmojis[bot.id] && (
+                                        <motion.div initial={{ opacity: 0, scale: 0, y: 10 }} animate={{ opacity: 1, scale: 1, y: -30 }} exit={{ opacity: 0, scale: 0 }} className="absolute left-1/2 -translate-x-1/2 bg-amber-500 text-black px-2 py-1 rounded-lg text-lg font-bold shadow-xl z-50">
+                                            {activeEmojis[bot.id]}
+                                            <div className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 w-2 h-2 bg-amber-500 rotate-45"></div>
+                                        </motion.div>
+                                    )}
                                 </AnimatePresence>
+                            </div>
+                            <div className="flex -space-x-10 sm:-space-x-12 mt-2">
+                                {Array.from({ length: botHandSize }).map((_, i) => (
+                                    <PlayingCard key={`${bot.id}-card-${i}`} isFaceDown layout className="w-[45px] h-[65px]" />
+                                ))}
                             </div>
                         </div>
                     )
                 })}
 
+                {/* Center Area */}
                 <div className="flex flex-col items-center justify-center gap-6 flex-grow mt-10 z-20 pointer-events-none pb-12">
-
-                    {/* Played Cards */}
                     <div className="flex gap-4 min-h-[6rem] items-center justify-center w-full flex-wrap pointer-events-auto">
                         <AnimatePresence>
                             {gameState.round.attackCards.map((attackCard: any, i: number) => {
                                 const defenseCard = gameState.round.defenceCards[i];
                                 return (
-                                    <motion.div
-                                        key={`table-${attackCard.suite}-${attackCard.rank}`}
-                                        layout
-                                        initial={{ opacity: 0, scale: 0.5, y: -50 }}
-                                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                                        exit={{ opacity: 0, x: 500, rotate: 120, transition: { duration: 0.4 } }}
-                                        className="relative w-[70px] h-[100px]"
-                                    >
+                                    <motion.div key={`table-${attackCard.suite}-${attackCard.rank}`} layout initial={{ opacity: 0, scale: 0.5, y: -50 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, x: 500, rotate: 120 }} className="relative w-[70px] h-[100px]">
                                         <PlayingCard card={attackCard} className="absolute top-0 left-0 shadow-[0_5px_15px_rgba(0,0,0,0.4)]" />
                                         {defenseCard && (
-                                            <PlayingCard
-                                                card={defenseCard}
-                                                initial={{ opacity: 0, x: 20, y: -20, rotate: 15 }}
-                                                animate={{ opacity: 1, x: 0, y: 0, rotate: 0 }}
-                                                className="absolute top-4 left-4 z-10 shadow-[5px_5px_15px_rgba(0,0,0,0.6)]"
-                                            />
+                                            <PlayingCard card={defenseCard} initial={{ opacity: 0, x: 20, y: -20, rotate: 15 }} animate={{ opacity: 1, x: 0, y: 0, rotate: 0 }} className="absolute top-4 left-4 z-10 shadow-[5px_5px_15px_rgba(0,0,0,0.6)]" />
                                         )}
                                     </motion.div>
                                 );
@@ -181,15 +151,12 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                         </AnimatePresence>
                     </div>
 
-                    {/* FIX 2: Widen deck container and wrap Trump Card rotation securely */}
                     <div className="flex justify-center items-center relative h-28 w-36 mt-4 pointer-events-auto">
                         {gameState.stockCount > 0 ? (
                             <>
-                                {/* Trump Card - Safely rotated via wrapper div */}
                                 <div className="absolute left-[-15px] top-4 rotate-90 z-0 shadow-[0_0_10px_rgba(0,0,0,0.5)]">
                                     <PlayingCard card={gameState.trumpCard} />
                                 </div>
-                                {/* The Deck */}
                                 <div className="absolute right-2 z-10 flex flex-col items-center group cursor-pointer hover:-translate-y-2 transition-all" onClick={passOrTake}>
                                     <PlayingCard isFaceDown className="shadow-[5px_5px_15px_rgba(0,0,0,0.5)]" />
                                     <div className="absolute -bottom-4 bg-blue-900 text-blue-300 text-[10px] font-bold px-3 py-1 rounded-full border border-blue-400 group-hover:bg-blue-600 group-hover:text-white shadow-lg">
@@ -205,7 +172,17 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                     </div>
                 </div>
 
-                <div className="flex justify-center -mb-4 min-h-[6rem] flex-wrap z-30 transition-opacity duration-300">
+                {/* My Hand and Emojis */}
+                <div className="flex justify-center -mb-4 min-h-[6rem] flex-wrap z-30 transition-opacity duration-300 relative">
+                    {/* FLOATING EMOJI FOR ME */}
+                    <AnimatePresence>
+                        {activeEmojis[HUMAN_ID] && (
+                            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: -60 }} exit={{ opacity: 0 }} className="absolute left-1/2 -translate-x-1/2 bg-white border-2 border-amber-500 p-2 rounded-full shadow-2xl z-50 text-2xl">
+                                {activeEmojis[HUMAN_ID]}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
                     <AnimatePresence>
                         {myHand.map((card: any, index: number) => (
                             <PlayingCard
@@ -226,7 +203,22 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                 </div>
             </div>
 
-            <button onClick={onLeave} className="bg-red-900/50 text-red-400 hover:bg-red-600 hover:text-white p-3 rounded-lg font-bold transition-colors z-10">
+            {/* EMOJI REACTION TRAY */}
+            <div className="absolute right-2 bottom-32 flex flex-col gap-2 z-50">
+                {EMOJIS.map((emoji) => (
+                    <motion.button
+                        key={emoji}
+                        whileHover={{ scale: 1.2, x: -5 }}
+                        whileTap={{ scale: 0.9 }}
+                        onClick={() => sendEmoji(emoji)}
+                        className="w-9 h-9 bg-black/60 backdrop-blur-md border border-white/10 rounded-full flex items-center justify-center text-lg shadow-xl hover:bg-zinc-800"
+                    >
+                        {emoji}
+                    </motion.button>
+                ))}
+            </div>
+
+            <button onClick={onLeave} className="bg-red-900/20 text-red-500 hover:bg-red-600 hover:text-white p-3 rounded-lg text-xs font-bold transition-colors z-10 border border-red-900/30 uppercase tracking-widest">
                 Leave Game
             </button>
         </div>

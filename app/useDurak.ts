@@ -50,4 +50,35 @@ export function useDurak(settings: any) {
         passOrTake,
         HUMAN_ID: humanId
     };
+
+    // Inside app/useDurak.ts
+
+    // Add a new state to track visible emojis
+    const [activeEmojis, setActiveEmojis] = useState<Record<string, string>>({});
+
+    useEffect(() => {
+        const handleEmoji = ({ userId: senderId, emoji }: { userId: string, emoji: string }) => {
+            // Map the emoji to the sender's ID
+            setActiveEmojis(prev => ({ ...prev, [senderId]: emoji }));
+
+            // Auto-remove the emoji after 3 seconds so the screen stays clean
+            setTimeout(() => {
+                setActiveEmojis(prev => {
+                    const newState = { ...prev };
+                    delete newState[senderId];
+                    return newState;
+                });
+            }, 3000);
+        };
+
+        socket.on('new_emoji', handleEmoji);
+        return () => { socket.off('new_emoji', handleEmoji); };
+    }, []);
+
+    const sendEmoji = (emoji: string) => {
+        socket.emit('send_emoji', { roomId: settings.roomId, emoji });
+    };
+
+    // Return these in your hook's return object:
+    return { gameState, playCard, passOrTake, HUMAN_ID: humanId, sendEmoji, activeEmojis };
 }
