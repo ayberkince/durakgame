@@ -11,8 +11,7 @@ import { Player } from '../src/engine/Player';
 import { Card } from '../src/engine/Card';
 import { UserModel } from './models/User';
 
-// Replace: dotenv.config();
-// With this:
+// 1. CONFIGURATION: Load environment variables
 dotenv.config({ path: './server/.env' });
 
 const app = express();
@@ -23,7 +22,7 @@ const io = new Server(httpServer, {
     cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] }
 });
 
-// 2. DATABASE: Single Secure Connection
+// 2. DATABASE: Secure Atlas Connection
 const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!MONGODB_URI) {
@@ -47,7 +46,7 @@ io.on('connection', (socket) => {
 
     console.log(`[+] Executive connected: ${userName}`);
 
-    // --- ECONOMY & IDENTITY ---
+    // --- IDENTITY & ECONOMY ---
     socket.on('sync_profile', async (callback) => {
         try {
             let user = await UserModel.findOne({ userId });
@@ -69,44 +68,93 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- GAMEPLAY UTILITIES ---
+    // --- GAMEPLAY ORCHESTRATION ---
     const broadcastGameState = (roomId: string) => {
         const room = activeRooms.get(roomId);
         if (!room || !room.gameInstance) return;
 
-        const engineState = room.gameInstance.toObject();
+        try {
+            const engineState = room.gameInstance.toObject();
 
-        // Check if match just ended
-        if (room.gameInstance.isEnded() && !room.economyProcessed) {
-            processGameOver(roomId, engineState);
-        }
+            // End-game economic processing
+            if (room.gameInstance.isEnded() && !room.economyProcessed) {
+                processGameOver(roomId, engineState);
+            }
 
-        // Send personalized (sanitized) states to each player
-        room.players.forEach((pid: string) => {
-            const socketId = room.socketLookup[pid];
-            if (!socketId) return;
+            // Personalized Fog of War
+            room.players.forEach((pid: string) => {
+                const socketId = room.socketLookup[pid];
+                if (!socketId) return;
 
-            const sanitizedState = { ...engineState };
-            sanitizedState.hands = {};
+                const sanitizedState = { ...engineState };
+                sanitizedState.hands = {};
 
-            room.gameInstance.getPlayers().forEach((p: any) => {
-                const realHand = room.gameInstance.getPlayerHand(p).toObject().cards;
-                const isOwner = (p.getId() === 0 && pid === room.hostId) ||
-                    (room.playerMapping && room.playerMapping[pid] === p.getId());
+                room.gameInstance.getPlayers().forEach((p: any) => {
+                    const realHand = room.gameInstance.getPlayerHand(p).toObject().cards;
+                    const seatId = p.getId();
+                    const isOwner = (seatId === 0 && pid === room.hostId) ||
+                        (room.playerMapping[pid] === seatId);
 
-                sanitizedState.hands[p.getId()] = isOwner ? realHand : realHand.map(() => ({ hidden: true }));
+                    sanitizedState.hands[seatId] = isOwner ? realHand : realHand.map(() => ({ hidden: true }));
+                });
+
+                io.to(socketId).emit('game_state_update', sanitizedState);
             });
 
-            io.to(socketId).emit('game_state_update', sanitizedState);
-        });
+            // Handle Bot Thinking Cycles
+            if (room.botTimer) clearTimeout(room.botTimer);
+            if (!room.gameInstance.isEnded() && room.settings.mode === 'single') {
+                room.botTimer = setTimeout(() => processBotTurn(roomId), 1500);
+            }
+        } catch (err) {
+            console.error(`❌ BROADCAST ERROR [Room ${roomId}]:`, err);
+        }
+    };
 
-        setTimeout(() => processBotTurn(roomId), 1000);
+    const processBotTurn = (roomId: string) => {
+        const room = activeRooms.get(roomId);
+        if (!room || !room.gameInstance || room.gameInstance.isEnded()) return;
+
+        const state = room.gameInstance.toObject();
+        const currentId = state.currentId;
+
+        if (room.settings.mode === 'single' && currentId !== 0) {
+            const botPlayer = room.gameInstance.getPlayers().find((p: any) => p.getId() === currentId);
+            if (!botPlayer) return;
+
+            console.log(`[🤖] Bot_${currentId} is thinking...`);
+
+            // Efficiency: Sort by rank to play the lowest cards first
+            const cardsInHand = room.gameInstance.getPlayerHand(botPlayer).toObject().cards;
+            const sortedCards = [...cardsInHand].sort((a, b) => a.rank - b.rank);
+
+            let moveMade = false;
+            for (const c of sortedCards) {
+                const cardObj = new Card(c.suite, c.rank);
+                if (room.gameInstance.act(cardObj)) {
+                    console.log(`[🤖] Bot_${currentId} played: ${c.rank} of ${c.suite}`);
+                    moveMade = true;
+                    break;
+                }
+            }
+
+            if (!moveMade) {
+                if (currentId === state.defenderId) {
+                    console.log(`[🤖] Bot_${currentId} takes cards.`);
+                    room.gameInstance.take();
+                } else {
+                    console.log(`[🤖] Bot_${currentId} passes.`);
+                    room.gameInstance.pass();
+                }
+            }
+            broadcastGameState(roomId);
+        }
     };
 
     const processGameOver = async (roomId: string, state: any) => {
         const room = activeRooms.get(roomId);
         room.economyProcessed = true;
-        const stakes = 1000;
+        const stakes = room.settings.stakes || 1000;
 
         if (state.players.length === 1) {
             const loserEngineId = state.players[0].id;
@@ -119,54 +167,42 @@ io.on('connection', (socket) => {
                     await UserModel.updateOne({ userId: winPid }, { $inc: { "balance": stakes, "stats.wins": 1, "stats.gamesPlayed": 1 } });
                 }
             }
-            console.log(`[💰] Stakes processed for room: ${roomId}`);
+            console.log(`[💰] Stakes of $${stakes} processed for room: ${roomId}`);
         }
     };
 
-    const processBotTurn = (roomId: string) => {
-        const room = activeRooms.get(roomId);
-        if (!room || !room.gameInstance || room.gameInstance.isEnded()) return;
-
-        const state = room.gameInstance.toObject();
-        if (room.settings.mode === 'single' && state.currentId > 0) {
-            const botPlayer = room.gameInstance.getPlayers().find((p: any) => p.getId() === state.currentId);
-            if (!botPlayer) return;
-
-            const botHand = room.gameInstance.getPlayerHand(botPlayer).toObject().cards.map((c: any) => new Card(c.suite, c.rank));
-            botHand.sort((a: any, b: any) => a.getRank() - b.getRank());
-
-            let moveMade = false;
-            for (const card of botHand) {
-                if (room.gameInstance.act(card)) { moveMade = true; break; }
-            }
-            if (!moveMade) {
-                state.currentId === state.defenderId ? room.gameInstance.take() : room.gameInstance.pass();
-            }
-            broadcastGameState(roomId);
-        }
-    };
-
-    // --- PLAYER ACTIONS ---
+    // --- NETWORK ACTIONS ---
     socket.on('create_room', (settings, callback) => {
-        const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-        const newRoom = {
-            id: roomId, hostId: userId, hostName: userName, settings,
-            players: [userId], socketLookup: { [userId]: socket.id },
-            playerMapping: { [userId]: 0 }, gameInstance: null as Game | null, economyProcessed: false
-        };
+        try {
+            console.log(`[🛠] Creating Room for ${userName}...`);
+            const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-        activeRooms.set(roomId, newRoom);
-        socket.join(roomId);
+            const newRoom = {
+                id: roomId, hostId: userId, hostName: userName, settings,
+                players: [userId], socketLookup: { [userId]: socket.id },
+                playerMapping: { [userId]: 0 }, gameInstance: null as Game | null,
+                economyProcessed: false, botTimer: null as any
+            };
 
-        if (settings.mode === 'single') {
-            const enginePlayers = [new Player(0, userName)];
-            for (let i = 1; i < settings.players; i++) enginePlayers.push(new Player(i, `Bot_${i}`));
-            newRoom.gameInstance = new Game();
-            newRoom.gameInstance.init(enginePlayers, settings);
+            activeRooms.set(roomId, newRoom);
+            socket.join(roomId);
+
+            if (settings.mode === 'single') {
+                const enginePlayers = [new Player(0, userName)];
+                for (let i = 1; i < settings.players; i++) {
+                    enginePlayers.push(new Player(i, `Bot_${i}`));
+                }
+                newRoom.gameInstance = new Game();
+                newRoom.gameInstance.init(enginePlayers, settings);
+                console.log(`[✅] Match Initialized with ${settings.players} seats.`);
+            }
+
+            callback({ success: true, roomId });
+            if (settings.mode === 'single') broadcastGameState(roomId);
+        } catch (err) {
+            console.error("❌ CREATE_ROOM FAILED:", err);
+            callback({ success: false, error: "Initialization error." });
         }
-
-        callback({ success: true, roomId });
-        if (settings.mode === 'single') broadcastGameState(roomId);
     });
 
     socket.on('join_room', (roomId, callback) => {
@@ -184,7 +220,9 @@ io.on('connection', (socket) => {
 
         callback({ success: true, settings: room.settings });
         if (room.players.length === room.settings.players && !room.gameInstance) {
-            const enginePlayers = room.players.map((pid: string) => new Player(room.playerMapping[pid], pid === room.hostId ? room.hostName : `Player_${room.playerMapping[pid]}`));
+            const enginePlayers = room.players.map((pid: string) =>
+                new Player(room.playerMapping[pid], pid === room.hostId ? room.hostName : `Player_${room.playerMapping[pid]}`)
+            );
             room.gameInstance = new Game();
             room.gameInstance.init(enginePlayers, room.settings);
             broadcastGameState(roomId);
@@ -193,7 +231,8 @@ io.on('connection', (socket) => {
 
     socket.on('play_card', ({ roomId, card }) => {
         const room = activeRooms.get(roomId);
-        if (room?.gameInstance && room.playerMapping[userId] === room.gameInstance.toObject().currentId) {
+        const playerIdx = room?.playerMapping[userId];
+        if (room?.gameInstance && playerIdx === room.gameInstance.toObject().currentId) {
             room.gameInstance.act(new Card(card.suite, card.rank));
             broadcastGameState(roomId);
         }
@@ -201,18 +240,12 @@ io.on('connection', (socket) => {
 
     socket.on('pass_or_take', ({ roomId }) => {
         const room = activeRooms.get(roomId);
-        if (room?.gameInstance && room.playerMapping[userId] === room.gameInstance.toObject().currentId) {
+        const playerIdx = room?.playerMapping[userId];
+        if (room?.gameInstance && playerIdx === room.gameInstance.toObject().currentId) {
             const state = room.gameInstance.toObject();
             state.currentId === state.defenderId ? room.gameInstance.take() : room.gameInstance.pass();
             broadcastGameState(roomId);
         }
-    });
-
-    socket.on('get_leaderboard', async (callback) => {
-        try {
-            const topPlayers = await UserModel.find({}).sort({ balance: -1 }).limit(10).select('username balance stats -_id');
-            callback({ success: true, leaderboard: topPlayers });
-        } catch (error) { callback({ success: false }); }
     });
 
     socket.on('send_emoji', ({ roomId, emoji }) => {
@@ -221,6 +254,13 @@ io.on('connection', (socket) => {
             const senderEngineId = room.playerMapping[userId];
             io.to(roomId).emit('new_emoji', { userId: senderEngineId, emoji });
         }
+    });
+
+    socket.on('get_leaderboard', async (callback) => {
+        try {
+            const topPlayers = await UserModel.find({}).sort({ balance: -1 }).limit(10).select('username balance stats -_id');
+            callback({ success: true, leaderboard: topPlayers });
+        } catch (error) { callback({ success: false }); }
     });
 
     socket.on('check_session', (callback) => {
@@ -236,7 +276,9 @@ io.on('connection', (socket) => {
         callback({ inGame: false });
     });
 
-    socket.on('disconnect', () => { console.log(`[-] Disconnected: ${userName}`); });
+    socket.on('disconnect', () => {
+        console.log(`[-] Disconnected: ${userName}`);
+    });
 });
 
 const PORT = process.env.PORT || 3002;

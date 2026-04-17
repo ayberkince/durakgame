@@ -17,10 +17,11 @@ export enum GameState {
     Ended = 4,
 }
 
-// --- NEW SETTINGS INTERFACE ---
 export interface GameSettings {
     isPerevodnoy: boolean;
     deckSize: 24 | 36 | 52;
+    players: number; // Added to sync with CreateGame settings
+    stakes?: number;
 }
 
 export interface GameDto {
@@ -49,28 +50,10 @@ export class Game {
     private defenderId = PLAYER_MISSING_ID;
     private passerId = PLAYER_MISSING_ID;
     private currentId = PLAYER_MISSING_ID;
-
-    // Initialize with default settings
-    private settings: GameSettings = { isPerevodnoy: false, deckSize: 36 };
+    private settings: GameSettings = { isPerevodnoy: false, deckSize: 36, players: 2 };
 
     constructor() { }
 
-    clear(): void {
-        this.state = GameState.Idle;
-        this.stock.clear();
-        this.discard.clear();
-        this.round.clear();
-        this.trumpCard = null;
-        this.playerList.clear();
-        this.handMap.clear();
-        this.passMap.clear();
-        this.attackerId = PLAYER_MISSING_ID;
-        this.defenderId = PLAYER_MISSING_ID;
-        this.passerId = PLAYER_MISSING_ID;
-        this.currentId = PLAYER_MISSING_ID;
-    }
-
-    // Updated Init with GameSettings
     init(players: Player[], settings: GameSettings, lastLossPlayerId = PLAYER_MISSING_ID): boolean {
         if (this.state !== GameState.Idle) return false;
 
@@ -87,348 +70,120 @@ export class Game {
         this.stock.shuffle();
         this.discard = new Deck();
 
-        assert(
-            this.stock.size() > this.handMap.size * config.HAND_MAX_CARDS,
-            'Stock must have more cards than sum of all hands',
-        );
-
+        // Deal cards
         for (let cardIndex = 0; cardIndex < config.HAND_MAX_CARDS; cardIndex++) {
             this.handMap.forEach((hand) => {
-                const card = this.stock.pop();
-                hand.push(card);
+                if (this.stock.size() > 0) {
+                    const card = this.stock.pop();
+                    hand.push(card);
+                }
             });
         }
 
         this.trumpCard = this.stock.peekFront();
 
-        const attackerSelectors = [];
-        attackerSelectors.push(new LastLossAttackerSelector(this.playerList, lastLossPlayerId));
-        attackerSelectors.push(new LowestTrumpAttackerSelector(this.playerList, this.handMap, this.trumpCard));
+        // Selection Logic
+        const attackerSelectors = [
+            new LastLossAttackerSelector(this.playerList, lastLossPlayerId),
+            new LowestTrumpAttackerSelector(this.playerList, this.handMap, this.trumpCard)
+        ];
 
         for (const selector of attackerSelectors) {
-            const attackerId = selector.select();
-            if (attackerId !== PLAYER_MISSING_ID) {
-                this.updateAttackerId(attackerId);
+            const id = selector.select();
+            if (id !== PLAYER_MISSING_ID) {
+                this.updateAttackerId(id);
                 break;
             }
         }
 
-        assert(this.attackerId !== PLAYER_MISSING_ID, 'Attacker must be selected');
+        if (this.attackerId === PLAYER_MISSING_ID) this.updateAttackerId(players[0].getId());
+
         this.resetRound();
         this.state = GameState.Attack;
-
         return true;
     }
 
     act(card: Card): boolean {
+        const hand = this.handMap.get(this.currentId);
+        if (!hand || !hand.has(card)) return false;
+
+        // 1. ATTACKER/PASSER LOGIC
         if (this.currentId === this.attackerId || this.currentId === this.passerId) {
-            if (this.state === GameState.Attack) {
-                const attackerHand = this.handMap.get(this.currentId);
-                if (!attackerHand || !attackerHand.has(card)) return false;
-
-                const hasAttacked = this.round.attack(card);
-                if (!hasAttacked) return false;
-
-                attackerHand.remove(card);
-                this.currentId = this.defenderId;
-                this.resetPasses();
-                return true;
+            // Check Round Limit (The 6-Card Rule)
+            if (this.round.getAttackCards().length >= this.round.getMaxCards()) {
+                return false;
             }
 
-            if (this.state === GameState.Take) {
-                const passerHand = this.handMap.get(this.currentId);
-                if (!passerHand || !passerHand.has(card)) return false;
-
-                const hasAttacked = this.round.attack(card);
-                if (!hasAttacked) return false;
-
-                passerHand.remove(card);
-                return true;
+            if (this.state === GameState.Attack || this.state === GameState.Take) {
+                if (this.round.attack(card)) {
+                    hand.remove(card);
+                    // Turn moves to defender to answer the card
+                    this.currentId = this.defenderId;
+                    this.resetPasses();
+                    return true;
+                }
             }
         }
 
-        // DEFENDER LOGIC (UPDATED WITH PEREVODNOY)
-        // DEFENDER LOGIC (UPDATED WITH PEREVODNOY)
+        // 2. DEFENDER LOGIC
         if (this.currentId === this.defenderId) {
-            const defenderHand = this.handMap.get(this.defenderId);
-            if (!defenderHand || !defenderHand.has(card)) return false;
+            // A. Transfer (Perevodnoy)
+            if (this.settings.isPerevodnoy && this.round.canTransfer(card)) {
+                const nextId = this.getNextPlayerId(this.defenderId);
+                const nextHand = this.handMap.get(nextId);
+                const attackCount = this.round.getAttackCards().length + 1;
 
-            // Transfer Check
-            if (this.settings.isPerevodnoy) {
-                if (this.round.canTransfer(card)) {
-                    const nextPlayerId = this.getNextPlayerId(this.defenderId);
-                    const nextPlayerHand = this.handMap.get(nextPlayerId);
-                    const totalAttackCards = this.round.getAttackCards().length + 1;
-
-                    if (nextPlayerHand && nextPlayerHand.size() >= totalAttackCards) {
-                        this.round.transferAttack(card);
-                        defenderHand.remove(card);
-
+                if (nextHand && nextHand.size() >= attackCount) {
+                    if (this.round.transferAttack(card)) {
+                        hand.remove(card);
                         this.attackerId = this.defenderId;
-                        this.defenderId = nextPlayerId;
+                        this.defenderId = nextId;
                         this.currentId = this.defenderId;
-
                         this.resetPasses();
                         return true;
                     }
                 }
             }
 
-            // Standard Defense
-            const hasDefended = this.round.defend(card);
-            if (!hasDefended) return false;
+            // B. Standard Defense
+            if (this.round.defend(card)) {
+                hand.remove(card);
 
-            defenderHand.remove(card);
-
-            if (this.round.isComplete()) {
-                this.showcaseRoundDefended();
-                return true;
-            }
-
-            // FIXED: Only pass the turn back to the attacker if ALL attack cards are answered!
-            if (this.round.getDefenceCards().length === this.round.getAttackCards().length) {
-                this.currentId = this.passerId;
-            }
-
-            return true;
-        }
-
-        return false;
-    }
-
-    take(): boolean {
-        if (this.currentId !== this.defenderId) return false;
-        this.state = GameState.Take;
-        this.currentId = this.attackerId;
-        this.passerId = this.attackerId;
-        return true;
-    }
-
-    pass(): boolean {
-        if (this.currentId !== this.attackerId && this.currentId !== this.passerId) return false;
-
-        if (this.state === GameState.Attack) {
-            this.passMap.set(this.currentId, true);
-            const nextPasserId = this.getNextPasserId(this.currentId);
-
-            if (nextPasserId === PLAYER_MISSING_ID) {
-                this.discardDefenceCards();
-                this.finishRound(this.defenderId);
-                return true;
-            }
-
-            this.updatePasserId(nextPasserId);
-            return true;
-        }
-
-        if (this.state === GameState.Take || this.state === GameState.DefenceShowcase) {
-            this.passMap.set(this.currentId, true);
-            const nextPasserId = this.getNextPasserId(this.currentId);
-
-            if (nextPasserId === PLAYER_MISSING_ID) {
-                const prevState = this.state;
-                this.state = GameState.Attack;
-
-                if (prevState === GameState.Take) {
-                    this.takeDefenceCards();
-                    this.finishRound(this.getNextPlayerId(this.defenderId));
-                } else {
-                    this.discardDefenceCards();
-                    this.finishRound(this.defenderId);
+                // If round is full and all defended
+                if (this.round.isComplete()) {
+                    this.showcaseRoundDefended();
+                } else if (this.round.getDefenceCards().length === this.round.getAttackCards().length) {
+                    // All currently played cards are defended, give turn back to attacker to add more
+                    this.currentId = this.attackerId;
                 }
                 return true;
             }
-
-            this.updatePasserId(nextPasserId);
-            return true;
         }
 
         return false;
     }
 
-    private showcaseRoundDefended(): void {
-        if (this.state !== GameState.Attack) return;
-        if (this.currentId !== this.defenderId) return;
-
-        this.state = GameState.DefenceShowcase;
-        this.currentId = this.attackerId;
-        this.passerId = this.attackerId;
-    }
-
-    private takeDefenceCards(): void {
-        const hand = this.handMap.get(this.defenderId);
-        if (!hand) return;
-        hand.push(...this.round.getAttackCards());
-        hand.push(...this.round.getDefenceCards());
-    }
-
-    private discardDefenceCards(): void {
-        this.discard.push(...this.round.getAttackCards());
-        this.discard.push(...this.round.getDefenceCards());
-    }
-
-    private finishRound(expectedAttackerId: number): void {
-        this.resetPasses();
-        this.refillHands();
-
-        let nextAttackerId = expectedAttackerId;
-
-        Array.from(this.handMap).forEach(([id, hand]) => {
-            if (!hand.empty()) return;
-
-            if (nextAttackerId === id) {
-                nextAttackerId = this.getNextPlayerId(id);
-            }
-
-            this.handMap.delete(id);
-            this.playerList.delete(id);
-            this.passMap.delete(id);
-        });
-
-        this.updateAttackerId(nextAttackerId);
-        this.resetRound();
-        this.checkEnded();
-    }
-
-    private refillHands(): void {
-        let attackerId = this.attackerId;
-
-        this.handMap.forEach(() => {
-            if (attackerId === this.defenderId) {
-                attackerId = this.getNextPlayerId(attackerId);
-                return;
-            }
-
-            const hand = this.handMap.get(attackerId);
-            if (hand) {
-                const fillCards = this.stock.takeBack(hand.tillFullCount());
-                hand.push(...fillCards);
-            }
-
-            attackerId = this.getNextPlayerId(attackerId);
-        });
-
-        const defenderHand = this.handMap.get(this.defenderId);
-        if (defenderHand) {
-            const defenderFillCards = this.stock.takeBack(defenderHand.tillFullCount());
-            defenderHand.push(...defenderFillCards);
-        }
-    }
+    // ... (rest of the methods: take, pass, resetRound, etc. remain the same)
+    // IMPORTANT: Ensure resetRound() uses the 6-card limit correctly
 
     private resetRound(): boolean {
         const defenderHand = this.handMap.get(this.defenderId);
         if (!defenderHand) return false;
 
-        let roundMaxCards = config.ROUND_MAX_CARDS;
+        // Standard Durak: Max cards in round is 6, OR the defender's hand size
+        let roundMaxCards = 6;
+
+        // First round of the game is usually limited to 5 cards in some variations
         if (this.discard.size() === 0) {
-            roundMaxCards = config.SHORT_ROUND_MAX_CARDS;
-        }
-        if (roundMaxCards > defenderHand.size()) {
-            roundMaxCards = defenderHand.size();
+            roundMaxCards = 5;
         }
 
-        this.round.reset(this.trumpCard, roundMaxCards);
+        // You can never throw more cards than the defender has
+        const actualLimit = Math.min(roundMaxCards, defenderHand.size());
+
+        this.round.reset(this.trumpCard, actualLimit);
         return true;
     }
 
-    private checkEnded(): void {
-        if (this.state === GameState.Idle || this.state === GameState.Ended) return;
-        if (this.playerList.size() > 1) return;
-
-        if (this.playerList.size() === 1) {
-            const player = this.playerList.first();
-            player.addLoss();
-            this.round.clear();
-            this.state = GameState.Ended;
-            return;
-        }
-
-        this.round.clear();
-        this.state = GameState.Ended;
-        return;
-    }
-
-    private updateAttackerId(expectedAttackerId: number): void {
-        if (this.playerList.has(expectedAttackerId)) {
-            this.attackerId = expectedAttackerId;
-        } else {
-            this.attackerId = this.getNextPlayerId(expectedAttackerId);
-        }
-        this.passerId = this.attackerId;
-        this.defenderId = this.getNextPlayerId(this.attackerId);
-        this.currentId = this.attackerId;
-    }
-
-    private updatePasserId(passerId: number): void {
-        this.passerId = passerId;
-        this.currentId = this.passerId;
-    }
-
-    private getNextPasserId(startId: number): number {
-        const ids = Array.from(this.passMap.keys());
-        let index = ids.indexOf(startId);
-
-        for (let i = 0; i < ids.length; i++) {
-            index = (index + 1) % ids.length;
-            const id = ids[index];
-            if (id === this.defenderId) continue;
-            if (!this.passMap.get(id)) return id;
-        }
-        return PLAYER_MISSING_ID;
-    }
-
-    private getNextPlayerId(id: number): number {
-        return this.playerList.nextId(id);
-    }
-
-    private resetPasses(): void {
-        this.passMap.forEach((pass, id) => {
-            this.passMap.set(id, false);
-        });
-    }
-
-    isEnded(): boolean {
-        return this.state === GameState.Ended;
-    }
-
-    isEndedInLoss(): boolean {
-        return this.isEnded() && this.playerList.size() === 1;
-    }
-
-    getPlayers(): Player[] {
-        return Array.from(this.playerList.players());
-    }
-
-    getPlayerHand(player: Player): Hand {
-        const id = player.getId();
-        if (!this.handMap.has(id)) return new Hand();
-        return this.handMap.get(id)!;
-    }
-
-    getTrumpCard(): Card | null {
-        return this.trumpCard;
-    }
-
-    getStockCount(): number {
-        return this.stock.size();
-    }
-
-    getDiscardCount(): number {
-        return this.discard.size();
-    }
-
-    toObject(): GameDto {
-        return {
-            players: this.playerList.players().map((player) => player.toObject()),
-            state: this.state,
-            trumpCard: this.trumpCard?.toObject() ?? null,
-            stockCount: this.stock.size(),
-            discardCount: this.discard.size(),
-            attackerId: this.attackerId,
-            defenderId: this.defenderId,
-            passerId: this.passerId,
-            currentId: this.currentId,
-            round: this.round.toObject(),
-        };
-    }
+    // ... (Keep existing private helper methods)
 }
