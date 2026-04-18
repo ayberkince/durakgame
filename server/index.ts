@@ -4,6 +4,8 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
+import Redis from 'ioredis';
+import { createAdapter } from '@socket.io/redis-adapter';
 
 // Engine & Model Imports
 import { Game } from '../src/engine/Game';
@@ -11,7 +13,7 @@ import { Player } from '../src/engine/Player';
 import { Card } from '../src/engine/Card';
 import { UserModel } from './models/User';
 
-// 1. CONFIGURATION: Load environment variables
+// 1. CONFIGURATION
 dotenv.config({ path: './server/.env' });
 
 const app = express();
@@ -22,28 +24,36 @@ const io = new Server(httpServer, {
     cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] }
 });
 
-// 2. DATABASE: Secure Atlas Connection
-const MONGODB_URI = process.env.MONGODB_URI;
+// 2. REDIS: The "Shared Brain" Adapter
+// (Required for scaling to multiple servers)
+if (process.env.REDIS_URL) {
+    const pubClient = new Redis(process.env.REDIS_URL);
+    const subClient = pubClient.duplicate();
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log("⚡ [REDIS] Shared Brain Adapter Synchronized");
+}
 
+// 3. DATABASE: Secure Atlas Connection
+const MONGODB_URI = process.env.MONGODB_URI;
 if (!MONGODB_URI) {
-    console.error("❌ ERROR: MONGODB_URI is missing in your .env file!");
+    console.error("❌ ERROR: MONGODB_URI is missing in .env!");
     process.exit(1);
 }
 
 mongoose.connect(MONGODB_URI)
-    .then(() => console.log("🌌 [ATLAS] Cloud Database Connected Successfully"))
+    .then(() => console.log("🌌 [ATLAS] Cloud Database Connected"))
     .catch(err => console.error("❌ [ATLAS] Connection Error:", err));
 
+// Local state for active engine instances
 const activeRooms = new Map<string, any>();
 
-// 3. SOCKET.IO LOGIC
+// 4. SOCKET.IO CORE ENGINE
 io.on('connection', (socket) => {
     const profile = socket.handshake.auth.profile;
     const userId = profile?.id;
     const userName = profile?.username;
 
     if (!userId || !userName) return;
-
     console.log(`[+] Executive connected: ${userName}`);
 
     // --- IDENTITY & ECONOMY ---
@@ -63,9 +73,7 @@ io.on('connection', (socket) => {
                 wins: user.stats.wins,
                 losses: user.stats.losses
             });
-        } catch (error) {
-            callback({ success: false });
-        }
+        } catch (error) { callback({ success: false }); }
     });
 
     // --- GAMEPLAY ORCHESTRATION ---
@@ -81,7 +89,7 @@ io.on('connection', (socket) => {
                 processGameOver(roomId, engineState);
             }
 
-            // Personalized Fog of War
+            // Personalized Fog of War (Sanitization)
             room.players.forEach((pid: string) => {
                 const socketId = room.socketLookup[pid];
                 if (!socketId) return;
@@ -104,11 +112,9 @@ io.on('connection', (socket) => {
             // Handle Bot Thinking Cycles
             if (room.botTimer) clearTimeout(room.botTimer);
             if (!room.gameInstance.isEnded() && room.settings.mode === 'single') {
-                room.botTimer = setTimeout(() => processBotTurn(roomId), 1500);
+                room.botTimer = setTimeout(() => processBotTurn(roomId), 1200);
             }
-        } catch (err) {
-            console.error(`❌ BROADCAST ERROR [Room ${roomId}]:`, err);
-        }
+        } catch (err) { console.error(`❌ BROADCAST ERROR [Room ${roomId}]:`, err); }
     };
 
     const processBotTurn = (roomId: string) => {
@@ -122,30 +128,20 @@ io.on('connection', (socket) => {
             const botPlayer = room.gameInstance.getPlayers().find((p: any) => p.getId() === currentId);
             if (!botPlayer) return;
 
-            console.log(`[🤖] Bot_${currentId} is thinking...`);
-
-            // Efficiency: Sort by rank to play the lowest cards first
-            const cardsInHand = room.gameInstance.getPlayerHand(botPlayer).toObject().cards;
-            const sortedCards = [...cardsInHand].sort((a, b) => a.rank - b.rank);
+            const hand = room.gameInstance.getPlayerHand(botPlayer).toObject().cards;
+            const sortedCards = [...hand].sort((a, b) => a.rank - b.rank);
 
             let moveMade = false;
             for (const c of sortedCards) {
                 const cardObj = new Card(c.suite, c.rank);
                 if (room.gameInstance.act(cardObj)) {
-                    console.log(`[🤖] Bot_${currentId} played: ${c.rank} of ${c.suite}`);
                     moveMade = true;
                     break;
                 }
             }
 
             if (!moveMade) {
-                if (currentId === state.defenderId) {
-                    console.log(`[🤖] Bot_${currentId} takes cards.`);
-                    room.gameInstance.take();
-                } else {
-                    console.log(`[🤖] Bot_${currentId} passes.`);
-                    room.gameInstance.pass();
-                }
+                currentId === state.defenderId ? room.gameInstance.take() : room.gameInstance.pass();
             }
             broadcastGameState(roomId);
         }
@@ -167,16 +163,53 @@ io.on('connection', (socket) => {
                     await UserModel.updateOne({ userId: winPid }, { $inc: { "balance": stakes, "stats.wins": 1, "stats.gamesPlayed": 1 } });
                 }
             }
-            console.log(`[💰] Stakes of $${stakes} processed for room: ${roomId}`);
         }
     };
 
-    // --- NETWORK ACTIONS ---
+    // --- NETWORK ACTIONS (WITH SECURITY) ---
+    socket.on('play_card', ({ roomId, card }) => {
+        const room = activeRooms.get(roomId);
+        if (!room || !room.gameInstance) return;
+
+        const state = room.gameInstance.toObject();
+        const expectedEngineId = room.playerMapping[userId];
+
+        // 🛡️ SECURITY 1: AUTH CHECK (Turn validation)
+        if (state.currentId !== expectedEngineId) {
+            console.log(`[!] Illegal Move: ${userName} tried to play out of turn.`);
+            return;
+        }
+
+        // 🛡️ SECURITY 2: OWNERSHIP CHECK (Anti-Cheat)
+        const playerObj = room.gameInstance.getPlayers().find((p: any) => p.getId() === expectedEngineId);
+        if (playerObj) {
+            const hand = room.gameInstance.getPlayerHand(playerObj);
+            const cardToPlay = new Card(card.suite, card.rank);
+            if (!hand.has(cardToPlay)) {
+                console.log(`[!] Anti-Cheat: ${userName} tried to play a card they don't own!`);
+                return;
+            }
+
+            // 3. EXECUTION
+            if (room.gameInstance.act(cardToPlay)) {
+                broadcastGameState(roomId);
+            }
+        }
+    });
+
+    socket.on('pass_or_take', ({ roomId }) => {
+        const room = activeRooms.get(roomId);
+        const expectedId = room?.playerMapping[userId];
+        if (room?.gameInstance && expectedId === room.gameInstance.toObject().currentId) {
+            const state = room.gameInstance.toObject();
+            state.currentId === state.defenderId ? room.gameInstance.take() : room.gameInstance.pass();
+            broadcastGameState(roomId);
+        }
+    });
+
     socket.on('create_room', (settings, callback) => {
         try {
-            console.log(`[🛠] Creating Room for ${userName}...`);
             const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
-
             const newRoom = {
                 id: roomId, hostId: userId, hostName: userName, settings,
                 players: [userId], socketLookup: { [userId]: socket.id },
@@ -189,20 +222,14 @@ io.on('connection', (socket) => {
 
             if (settings.mode === 'single') {
                 const enginePlayers = [new Player(0, userName)];
-                for (let i = 1; i < settings.players; i++) {
-                    enginePlayers.push(new Player(i, `Bot_${i}`));
-                }
+                for (let i = 1; i < settings.players; i++) enginePlayers.push(new Player(i, `Bot_${i}`));
                 newRoom.gameInstance = new Game();
                 newRoom.gameInstance.init(enginePlayers, settings);
-                console.log(`[✅] Match Initialized with ${settings.players} seats.`);
             }
 
             callback({ success: true, roomId });
             if (settings.mode === 'single') broadcastGameState(roomId);
-        } catch (err) {
-            console.error("❌ CREATE_ROOM FAILED:", err);
-            callback({ success: false, error: "Initialization error." });
-        }
+        } catch (err) { callback({ success: false, error: "Initialization error." }); }
     });
 
     socket.on('join_room', (roomId, callback) => {
@@ -229,38 +256,16 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('play_card', ({ roomId, card }) => {
-        const room = activeRooms.get(roomId);
-        const playerIdx = room?.playerMapping[userId];
-        if (room?.gameInstance && playerIdx === room.gameInstance.toObject().currentId) {
-            room.gameInstance.act(new Card(card.suite, card.rank));
-            broadcastGameState(roomId);
-        }
-    });
-
-    socket.on('pass_or_take', ({ roomId }) => {
-        const room = activeRooms.get(roomId);
-        const playerIdx = room?.playerMapping[userId];
-        if (room?.gameInstance && playerIdx === room.gameInstance.toObject().currentId) {
-            const state = room.gameInstance.toObject();
-            state.currentId === state.defenderId ? room.gameInstance.take() : room.gameInstance.pass();
-            broadcastGameState(roomId);
-        }
-    });
-
     socket.on('send_emoji', ({ roomId, emoji }) => {
         const room = activeRooms.get(roomId);
-        if (room) {
-            const senderEngineId = room.playerMapping[userId];
-            io.to(roomId).emit('new_emoji', { userId: senderEngineId, emoji });
-        }
+        if (room) io.to(roomId).emit('new_emoji', { userId: room.playerMapping[userId], emoji });
     });
 
     socket.on('get_leaderboard', async (callback) => {
         try {
-            const topPlayers = await UserModel.find({}).sort({ balance: -1 }).limit(10).select('username balance stats -_id');
-            callback({ success: true, leaderboard: topPlayers });
-        } catch (error) { callback({ success: false }); }
+            const top = await UserModel.find({}).sort({ balance: -1 }).limit(10).select('username balance stats -_id');
+            callback({ success: true, leaderboard: top });
+        } catch (e) { callback({ success: false }); }
     });
 
     socket.on('check_session', (callback) => {
@@ -276,9 +281,7 @@ io.on('connection', (socket) => {
         callback({ inGame: false });
     });
 
-    socket.on('disconnect', () => {
-        console.log(`[-] Disconnected: ${userName}`);
-    });
+    socket.on('disconnect', () => { console.log(`[-] Disconnected: ${userName}`); });
 });
 
 const PORT = process.env.PORT || 3002;
