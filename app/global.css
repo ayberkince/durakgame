@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+
+    /* The Base Agent Silhouette */
+    .avatar-base {
+        @apply relative overflow-hidden rounded-full border border-white/10 bg-zinc-800 shadow-inner;
+        background: linear-gradient(145deg, #18181b, #27272a);
+    }
+
+    /* Shadow Agent Shape (Head and Shoulders) */
+    .avatar-base::before {
+        content: "";
+        @apply absolute top-[20%] left-1/2 -translate-x-1/2 w-[40%] h-[40%] rounded-full bg-zinc-500/20;
+    }
+
+    .avatar-base::after {
+        content: "";
+        @apply absolute bottom-[-10%] left-1/2 -translate-x-1/2 w-[80%] h-[50%] rounded-t-[100%] bg-zinc-500/20;
+    }
+
+    /* TIER 1: Standard Bot (Emerald) */
+    .avatar-bot {
+        @apply border-emerald-500/30 shadow-[0_0_15px_rgba(16, 185, 129, 0.1)];
+    }
+
+    .avatar-bot::before,
+    .avatar-bot::after {
+        @apply bg-emerald-500/40;
+    }
+
+    /* TIER 2: Human Player (Amber/Gold) */
+    .avatar-human {
+        @apply border-amber-500/40 shadow-[0_0_20px_rgba(245, 158, 11, 0.2)];
+    }
+
+    .avatar-human::before,
+    .avatar-human::after {
+        @apply bg-amber-500/50;
+    }
+
+    /* TIER 3: High Roller (Purple/VIP) */
+    .avatar-vip {
+        @apply border-purple-500/50 shadow-[0_0_25px_rgba(168, 85, 247, 0.3)];
+        background: linear-gradient(145deg, #2e1065, #09090b);
+    }
+
+    .avatar-vip::before,
+    .avatar-vip::after {
+        @apply bg-purple-400/60;
+    }
+}
