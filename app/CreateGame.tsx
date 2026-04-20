@@ -23,12 +23,16 @@ export default function CreateGame({ onStart }: { onStart: (settings: any) => vo
         };
 
         socket.emit('create_room', settings, (response: any) => {
+            console.log("📩 Server Response:", response); // Check your browser console!
             if (response.success) {
                 if (mode === 'single') {
                     onStart({ ...settings, roomId: response.roomId });
                 } else {
                     onStart('go_to_lobby');
                 }
+            } else {
+                // THIS WILL TELL US THE ERROR
+                alert("🚨 PROTOCOL ERROR: " + (response.error || "Unknown Server Error"));
             }
         });
     };
@@ -147,6 +151,7 @@ export default function CreateGame({ onStart }: { onStart: (settings: any) => vo
                     <svg className="w-4 h-4 text-black" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
                 </div>
             </button>
+
         </div>
     );
 }

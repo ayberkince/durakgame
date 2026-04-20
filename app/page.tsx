@@ -22,6 +22,7 @@ export default function App() {
       setUserProfile(profile);
       socket.auth = { profile }; // Attach profile for socket handshake
       socket.connect();
+      if (currentTab === 'profile') setCurrentTab('private');
     }
 
     const onConnect = () => {

@@ -21,7 +21,7 @@ app.use(cors());
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-    cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] }
+    cors: { origin: "http://localhost:3000", methods: ["GET", "POST"], credentials: true }
 });
 
 // 2. REDIS: The "Shared Brain" Adapter
