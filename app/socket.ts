@@ -1,13 +1,8 @@
-import { io } from 'socket.io-client';
-import { getProfile } from './identity';
+import { io } from "socket.io-client";
 
-const URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3002';
-
-export const socket = io(URL, {
+export const socket = io("http://localhost:3002", {
     autoConnect: false,
-    auth: (cb) => {
-        // Fetch the profile right before connecting and send it to the server
-        const profile = getProfile();
-        cb({ profile });
-    }
+    transports: ["websocket"], // 👈 Force this to bypass CORS polling issues
+    reconnection: true,
+    timeout: 10000,
 });

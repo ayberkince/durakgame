@@ -1,66 +1,79 @@
 "use client";
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+
+// Component Imports
 import Profile from './Profile';
 import PrivateGamesList from './PrivateGamesList';
 import CreateGame from './CreateGame';
 import GameBoard from './GameBoard';
 import Leaderboard from './Leaderboard';
+import DossierLogin from './DossierLogin';
+
+// Engine & Network
 import { socket } from './socket';
 import { getProfile, saveProfile, UserProfile } from './identity';
 
 export default function App() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
-  const [usernameInput, setUsernameInput] = useState('');
   const [currentTab, setCurrentTab] = useState('private');
   const [gameSettings, setGameSettings] = useState<any>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [latency, setLatency] = useState<number | null>(null);
 
-  // 1. IDENTITY & RECONNECTION 
+  // 1. BOOT SEQUENCE & HEARTBEAT PROTOCOL
   useEffect(() => {
     const profile = getProfile();
-    if (profile) {
-      setUserProfile(profile);
-      socket.auth = { profile }; // Attach profile for socket handshake
-      socket.connect();
-      if (currentTab === 'profile') setCurrentTab('private');
-    }
 
+    // Register listeners BEFORE connecting
     const onConnect = () => {
-      console.log("⚡ [NETWORK] Secure Link Established");
-      // Check if this player is already in an active match on the server
+      console.log("⚡ [NETWORK] Encryption Handshake Verified");
+
+      // Check for an active session
       socket.emit('check_session', (response: any) => {
         if (response.inGame) {
-          console.log("💼 Active session detected. Resuming protocol...");
           setGameSettings({ ...response.settings, roomId: response.roomId });
           setCurrentTab('playing');
         }
       });
+
+      // Start Ping loop
+      const pingInterval = setInterval(() => {
+        socket.emit('ping_server', Date.now());
+      }, 5000);
+
+      return () => clearInterval(pingInterval);
+    };
+
+    const onPong = (startTime: number) => {
+      setLatency(Date.now() - startTime);
+    };
+
+    const onConnectError = (err: any) => {
+      console.error("❌ Socket Connection Error:", err.message);
     };
 
     socket.on('connect', onConnect);
+    socket.on('pong_server', onPong);
+    socket.on('connect_error', onConnectError);
+
+    if (profile) {
+      setUserProfile(profile);
+      socket.auth = { profile };
+      socket.connect();
+    }
+
+    setIsReady(true);
+
     return () => {
       socket.off('connect', onConnect);
+      socket.off('pong_server', onPong);
+      socket.off('connect_error', onConnectError);
     };
   }, []);
 
-  // 2. DOSSIER ACCESS HANDLER
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (usernameInput.trim().length < 3) return;
-
-    setIsConnecting(true);
-    // Mimic the "Authenticating" feel of an executive terminal
-    setTimeout(() => {
-      const newProfile = saveProfile(usernameInput.trim());
-      setUserProfile(newProfile);
-      socket.auth = { profile: newProfile };
-      socket.connect();
-      setIsConnecting(false);
-    }, 1000);
-  };
-
-  // 3. NAVIGATION & MATCHMAKING
-  const startMatch = (settings: any) => {
+  // 2. MATCHMAKING HANDLERS
+  const handleStartMatch = (settings: any) => {
     if (settings === 'go_to_lobby') {
       setCurrentTab('private');
     } else {
@@ -69,120 +82,132 @@ export default function App() {
     }
   };
 
-  const joinMatch = (roomId: string) => {
+  const handleJoinRoom = (roomId: string) => {
     socket.emit('join_room', roomId, (response: any) => {
       if (response.success) {
         setGameSettings({ ...response.settings, roomId });
         setCurrentTab('playing');
       } else {
-        alert(response.error || "Failed to join match.");
+        alert(response.error || "Access Denied.");
       }
     });
   };
 
-  // 4. ONBOARDING GATE (EXECUTIVE STYLE)
+  if (!isReady) return null;
+
+  // Inside App() -> 3. AUTHORIZATION GATE
+  // Inside App component -> 3. AUTHORIZATION GATE
   if (!userProfile) {
     return (
-      <div className="flex justify-center items-center min-h-screen bg-zinc-950 p-6 selection:bg-amber-500/30">
-        <div className="w-full max-w-sm space-y-8 animate-in fade-in zoom-in duration-1000">
-          <div className="text-center space-y-4">
-            <div className="w-20 h-20 bg-zinc-900 border border-amber-500/20 rounded-[2rem] flex items-center justify-center mx-auto shadow-2xl relative">
-              <span className="text-4xl">♠️</span>
-              <div className="absolute inset-0 rounded-[2rem] border border-amber-500/10 animate-pulse"></div>
-            </div>
-            <div>
-              <h1 className="text-2xl font-black uppercase tracking-[0.4em] text-amber-500">Durak Elite</h1>
-              <p className="text-[9px] text-zinc-600 font-bold uppercase tracking-widest mt-1">Authorized Access Only</p>
-            </div>
-          </div>
+      <DossierLogin
+        onAuthorized={(response) => {
+          const profile = response.profile || { username: response.username, id: response.userId };
+          if (profile?.username) saveProfile(profile.username);
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="relative group">
-              <input
-                type="text"
-                value={usernameInput}
-                onChange={(e) => setUsernameInput(e.target.value.toUpperCase())}
-                placeholder="ENTER CODENAME"
-                maxLength={12}
-                className="w-full bg-zinc-900/50 border border-white/5 rounded-2xl px-4 py-5 text-center text-xs font-black uppercase tracking-[0.3em] text-white focus:outline-none focus:border-amber-500/40 transition-all placeholder:text-zinc-800 shadow-inner"
-              />
-            </div>
-            <button
-              type="submit"
-              disabled={isConnecting || usernameInput.length < 3}
-              className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-20 text-black font-black uppercase tracking-[0.2em] text-[10px] py-5 rounded-2xl transition-all active:scale-95 shadow-lg shadow-amber-600/10"
-            >
-              {isConnecting ? "Initializing Protocol..." : "Access Dossier"}
-            </button>
-          </form>
-
-          <footer className="text-center pt-8">
-            <p className="text-[8px] text-zinc-800 uppercase font-black tracking-tighter leading-relaxed">
-              Global Economic Protocols in Effect<br />Database Persistence Active
-            </p>
-          </footer>
-        </div>
-      </div>
+          setUserProfile(profile);
+          socket.auth = { profile };
+          socket.connect(); // This triggers the useEffect listeners above
+          setCurrentTab('private');
+        }}
+      />
     );
   }
 
-  // 5. MAIN COMMAND CENTER
+  // 4. MAIN EXECUTIVE INTERFACE
   return (
-    <div className="flex justify-center items-center min-h-screen bg-zinc-950 text-zinc-100 selection:bg-amber-500/30 overflow-hidden">
+    <div className="flex justify-center items-center min-h-screen bg-zinc-950 text-zinc-100 selection:bg-amber-500/30 overflow-hidden font-sans">
 
-      {/* Mobile-First Frame */}
-      <div className="w-full h-[100dvh] md:max-w-[420px] md:max-h-[850px] bg-zinc-900/20 md:border md:border-white/5 md:rounded-[3rem] shadow-2xl flex flex-col relative backdrop-blur-3xl overflow-hidden">
+      {/* The Central Intelligence Frame */}
+      <div className="w-full h-[100dvh] md:max-w-[420px] md:max-h-[850px] bg-zinc-900/10 md:border md:border-white/5 md:rounded-[3.5rem] shadow-2xl flex flex-col relative backdrop-blur-3xl overflow-hidden md:ring-1 md:ring-white/5">
 
-        {/* Dynamic Header */}
-        <div className="flex-none pt-12 pb-6 px-8 text-center relative z-10">
-          <div className="hidden md:block absolute top-0 left-1/2 -translate-x-1/2 w-32 h-1 bg-zinc-800 rounded-b-xl opacity-30"></div>
-          <h1 className="text-[9px] font-black tracking-[0.4em] uppercase text-zinc-600 flex items-center justify-center gap-3">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-            {currentTab === 'profile' && "Agent Dossier"}
-            {currentTab === 'private' && "Secure Lobby"}
-            {currentTab === 'create' && "Initialize Match"}
-            {currentTab === 'playing' && "Active Table"}
-            {currentTab === 'leaderboard' && "Global Ranks"}
-          </h1>
+        {/* Dynamic Nav Header */}
+        <div className="flex-none pt-14 pb-6 px-10 text-center relative z-10">
+          <div className="hidden md:block absolute top-0 left-1/2 -translate-x-1/2 w-32 h-1.5 bg-zinc-800 rounded-b-2xl opacity-20"></div>
+
+          <motion.div
+            key={currentTab}
+            initial={{ opacity: 0, y: -5 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex items-center justify-center gap-3"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]"></span>
+
+            <h1 className="text-[9px] font-black tracking-[0.5em] uppercase text-zinc-600">
+              {currentTab === 'profile' && "Agent Dossier"}
+              {currentTab === 'private' && "Operational Lobby"}
+              {currentTab === 'create' && "Initialize Match"}
+              {currentTab === 'playing' && "Active Table"}
+              {currentTab === 'leaderboard' && "Global Ranks"}
+            </h1>
+
+            {/* 🔥 LATENCY INDICATOR */}
+            {latency !== null && (
+              <span className={`text-[8px] font-mono transition-colors duration-500 ${latency < 80 ? 'text-emerald-500/40' :
+                latency < 150 ? 'text-amber-500/40' : 'text-rose-500/40'
+                }`}>
+                {latency}MS
+              </span>
+            )}
+          </motion.div>
         </div>
 
         {/* Viewport Content */}
         <div className="flex-grow overflow-y-auto px-6 pb-6 custom-scrollbar relative z-10">
-          {currentTab === 'profile' && <Profile />}
-          {currentTab === 'private' && <PrivateGamesList onJoin={joinMatch} />}
-          {currentTab === 'create' && <CreateGame onStart={startMatch} />}
-          {currentTab === 'playing' && <GameBoard settings={gameSettings} onLeave={() => setCurrentTab('private')} />}
-          {currentTab === 'leaderboard' && <Leaderboard />}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentTab}
+              initial={{ opacity: 0, x: 10 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -10 }}
+              transition={{ duration: 0.2 }}
+              className="h-full"
+            >
+              {currentTab === 'profile' && <Profile />}
+              {currentTab === 'private' && <PrivateGamesList onJoin={handleJoinRoom} />}
+              {currentTab === 'create' && <CreateGame onStart={handleStartMatch} />}
+              {currentTab === 'playing' && <GameBoard settings={gameSettings} onLeave={() => setCurrentTab('private')} />}
+              {currentTab === 'leaderboard' && <Leaderboard />}
+            </motion.div>
+          </AnimatePresence>
         </div>
 
-        {/* Nav Controller (Hidden during table sessions) */}
+        {/* Global Nav Controller */}
         {currentTab !== 'playing' && (
-          <div className="flex-none flex justify-around p-6 bg-zinc-950/60 backdrop-blur-3xl border-t border-white/5 z-20 pb-10 md:pb-6">
-            <NavBtn id="profile" icon="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" active={currentTab === 'profile'} onClick={() => setCurrentTab('profile')} label="Dossier" />
-            <NavBtn id="private" icon="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" active={currentTab === 'private'} onClick={() => setCurrentTab('private')} label="Lobby" />
-            <NavBtn id="create" icon="M12 4v16m8-8H4" active={currentTab === 'create'} onClick={() => setCurrentTab('create')} label="Deploy" />
-            <NavBtn id="leaderboard" icon="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" active={currentTab === 'leaderboard'} onClick={() => setCurrentTab('leaderboard')} label="Ranks" />
+          <div className="flex-none flex justify-around p-6 bg-zinc-950/80 backdrop-blur-3xl border-t border-white/5 z-20 pb-12 md:pb-8">
+            <NavBtn icon="dossier" active={currentTab === 'profile'} onClick={() => setCurrentTab('profile')} label="Dossier" />
+            <NavBtn icon="lobby" active={currentTab === 'private'} onClick={() => setCurrentTab('private')} label="Lobby" />
+            <NavBtn icon="deploy" active={currentTab === 'create'} onClick={() => setCurrentTab('create')} label="Deploy" />
+            <NavBtn icon="ranks" active={currentTab === 'leaderboard'} onClick={() => setCurrentTab('leaderboard')} label="Ranks" />
           </div>
         )}
       </div>
 
-      {/* Background Ambience */}
+      {/* Atmospheric FX */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden -z-10">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-amber-500/5 rounded-full blur-[120px]"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-zinc-500/5 rounded-full blur-[120px]"></div>
+        <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-amber-500/5 rounded-full blur-[140px]"></div>
+        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-zinc-600/5 rounded-full blur-[120px]"></div>
       </div>
     </div>
   );
 }
 
-// Nav Button Component
 function NavBtn({ icon, active, onClick, label }: any) {
+  const icons: any = {
+    dossier: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
+    lobby: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z",
+    deploy: "M12 4v16m8-8H4",
+    ranks: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+  };
+
   return (
-    <button onClick={onClick} className={`flex flex-col items-center gap-2 transition-all group ${active ? 'text-amber-500' : 'text-zinc-700 hover:text-zinc-500'}`}>
+    <button
+      onClick={onClick}
+      className={`flex flex-col items-center gap-2.5 transition-all group ${active ? 'text-amber-500' : 'text-zinc-700 hover:text-zinc-500'}`}
+    >
       <svg className={`w-5 h-5 transition-transform ${active ? 'scale-110' : 'group-hover:scale-105'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={icon} />
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={icons[icon]} />
       </svg>
-      <span className="text-[8px] font-black uppercase tracking-[0.2em]">{label}</span>
+      <span className="text-[8px] font-black uppercase tracking-[0.25em]">{label}</span>
     </button>
   );
 }
