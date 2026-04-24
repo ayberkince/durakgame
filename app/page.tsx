@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Component Imports
@@ -21,28 +21,29 @@ export default function App() {
   const [isReady, setIsReady] = useState(false);
   const [latency, setLatency] = useState<number | null>(null);
 
-  // 1. BOOT SEQUENCE & HEARTBEAT PROTOCOL
+  const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 1. LIFECYCLE & SOCKET ORCHESTRATION
   useEffect(() => {
     const profile = getProfile();
 
-    // Register listeners BEFORE connecting
     const onConnect = () => {
       console.log("⚡ [NETWORK] Encryption Handshake Verified");
 
-      // Check for an active session
+      // Request active session recovery
       socket.emit('check_session', (response: any) => {
         if (response.inGame) {
+          console.log("💼 Resuming active contract...");
           setGameSettings({ ...response.settings, roomId: response.roomId });
           setCurrentTab('playing');
         }
       });
 
-      // Start Ping loop
-      const pingInterval = setInterval(() => {
+      // Initialize Heartbeat
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      heartbeatRef.current = setInterval(() => {
         socket.emit('ping_server', Date.now());
       }, 5000);
-
-      return () => clearInterval(pingInterval);
     };
 
     const onPong = (startTime: number) => {
@@ -50,13 +51,25 @@ export default function App() {
     };
 
     const onConnectError = (err: any) => {
-      console.error("❌ Socket Connection Error:", err.message);
+      console.warn("⚠️ Connection Warning:", err.message);
+      // If we timeout, we force a transport upgrade check
+      if (err.message === "timeout") {
+        socket.connect();
+      }
     };
 
+    const onDisconnect = () => {
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+      setLatency(null);
+    };
+
+    // Attach Global Listeners
     socket.on('connect', onConnect);
     socket.on('pong_server', onPong);
     socket.on('connect_error', onConnectError);
+    socket.on('disconnect', onDisconnect);
 
+    // Boot Logic
     if (profile) {
       setUserProfile(profile);
       socket.auth = { profile };
@@ -65,10 +78,13 @@ export default function App() {
 
     setIsReady(true);
 
+    // Cleanup on App Unmount
     return () => {
       socket.off('connect', onConnect);
       socket.off('pong_server', onPong);
       socket.off('connect_error', onConnectError);
+      socket.off('disconnect', onDisconnect);
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
     };
   }, []);
 
@@ -95,8 +111,7 @@ export default function App() {
 
   if (!isReady) return null;
 
-  // Inside App() -> 3. AUTHORIZATION GATE
-  // Inside App component -> 3. AUTHORIZATION GATE
+  // 3. AUTHORIZATION GATE
   if (!userProfile) {
     return (
       <DossierLogin
@@ -106,7 +121,7 @@ export default function App() {
 
           setUserProfile(profile);
           socket.auth = { profile };
-          socket.connect(); // This triggers the useEffect listeners above
+          socket.connect();
           setCurrentTab('private');
         }}
       />
@@ -130,7 +145,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0 }}
             className="flex items-center justify-center gap-3"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.5)]"></span>
+            <span className={`w-1.5 h-1.5 rounded-full shadow-[0_0_8px_rgba(245,158,11,0.5)] ${latency ? 'bg-amber-500' : 'bg-zinc-800'}`}></span>
 
             <h1 className="text-[9px] font-black tracking-[0.5em] uppercase text-zinc-600">
               {currentTab === 'profile' && "Agent Dossier"}
@@ -143,7 +158,7 @@ export default function App() {
             {/* 🔥 LATENCY INDICATOR */}
             {latency !== null && (
               <span className={`text-[8px] font-mono transition-colors duration-500 ${latency < 80 ? 'text-emerald-500/40' :
-                latency < 150 ? 'text-amber-500/40' : 'text-rose-500/40'
+                  latency < 150 ? 'text-amber-500/40' : 'text-rose-500/40'
                 }`}>
                 {latency}MS
               </span>
