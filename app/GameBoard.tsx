@@ -43,7 +43,7 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
 
     const isWaiting = gameState.status === 'waiting';
     const isMyTurn = gameState.currentId === HUMAN_ID;
-    const isGameOver = gameState.state === 4;
+    const isGameOver = gameState.state === 4 || gameState.isEnded;
     const isDefending = HUMAN_ID === gameState.defenderId;
 
     const myHandRaw = gameState.hands ? gameState.hands[HUMAN_ID] || [] : [];
@@ -204,6 +204,40 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                     </button>
                 ))}
             </div>
+
+            <AnimatePresence>
+                {isGameOver && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="absolute inset-0 z-[100] bg-zinc-950/90 backdrop-blur-xl flex flex-col items-center justify-center p-10 text-center"
+                    >
+                        <motion.div
+                            initial={{ scale: 0.5, y: 20 }}
+                            animate={{ scale: 1, y: 0 }}
+                            className="bg-zinc-900 border border-white/5 p-8 rounded-[3rem] shadow-2xl max-w-xs"
+                        >
+                            <div className="text-5xl mb-6">
+                                {/* Logic: If you are NOT the last person in the engine's player list, you won! */}
+                                {gameState.players.some((p: any) => p.id === HUMAN_ID) ? "🤡" : "🏆"}
+                            </div>
+                            <h2 className="text-xl font-black text-white uppercase tracking-tighter mb-2">
+                                Match Concluded
+                            </h2>
+                            <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest leading-relaxed mb-8">
+                                The session has been terminated. Final tallies have been recorded in the global ledger.
+                            </p>
+                            <button
+                                onClick={onLeave}
+                                className="w-full py-4 bg-amber-600 text-black font-black uppercase tracking-[0.3em] text-[10px] rounded-2xl shadow-xl active:scale-95 transition-all"
+                            >
+                                Return to Lobby
+                            </button>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
 
             <button onClick={onLeave} className="text-[9px] font-black uppercase tracking-[0.4em] text-zinc-700 hover:text-rose-500 transition-colors py-2 text-center">
                 Abort Current Operation
