@@ -24,15 +24,19 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
     // 🛡️ THE HANDSHAKE PROTOCOL
     useEffect(() => {
         if (settings?.roomId) {
+            console.log("🛰️ Requesting tactical synchronization for Sector:", settings.roomId);
             socket.emit('request_sync', settings.roomId);
         }
     }, [settings?.roomId]);
 
-    if (!gameState) return (
-        <div className="flex items-center justify-center h-full bg-zinc-950">
-            <div className="w-8 h-8 border-2 border-amber-500/20 border-t-amber-500 rounded-full animate-spin" />
-        </div>
-    );
+    if (!gameState) {
+        return (
+            <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
+                <div className="w-10 h-10 border-2 border-amber-500/20 border-t-amber-500 rounded-full animate-spin"></div>
+                <p className="text-zinc-600 font-black uppercase tracking-[0.3em] text-[10px]">Establishing Secure Link...</p>
+            </div>
+        );
+    }
 
     const isWaiting = gameState.status === 'waiting';
     const isGameOver = gameState.state === 4 || gameState.isEnded;
@@ -40,14 +44,14 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
     const isDefending = HUMAN_ID === gameState.defenderId;
     const isHost = settings.mode === 'single' || gameState.hostId === HUMAN_ID;
 
-    // 📐 SMART SEATING ALGORITHM (The "U-Shape" Arc)
+    // 📐 SMART SEATING ALGORITHM
     const getOpponentStyle = (index: number, total: number) => {
         const startAngle = Math.PI * 1.1;
         const endAngle = Math.PI * -0.1;
         const angle = total === 1 ? Math.PI / 2 : startAngle - (index * (startAngle - endAngle) / (total - 1));
 
-        const rx = 40; // Horizontal radius
-        const ry = 28; // Vertical radius
+        const rx = 40;
+        const ry = 28;
         return {
             left: `${50 + rx * Math.cos(angle)}%`,
             top: `${38 - ry * Math.sin(angle)}%`,
@@ -56,15 +60,68 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
         };
     };
 
-    const myHand = (gameState.hands?.[HUMAN_ID] || []).sort((a: any, b: any) => {
-        const aT = a.suite === gameState.trumpCard?.suite;
-        const bT = b.suite === gameState.trumpCard?.suite;
-        return aT === bT ? a.rank - b.rank : aT ? 1 : -1;
+    // Sort hand: Non-trumps first (by rank), then Trumps (by rank)
+    const myHandRaw = gameState.hands ? gameState.hands[HUMAN_ID] || [] : [];
+    const myHand = [...myHandRaw].sort((a, b) => {
+        const aIsTrump = a.suite === gameState.trumpCard?.suite;
+        const bIsTrump = b.suite === gameState.trumpCard?.suite;
+        if (aIsTrump && !bIsTrump) return 1;
+        if (!aIsTrump && bIsTrump) return -1;
+        return a.rank - b.rank;
     });
 
     const opponents = gameState.players?.filter((p: any) => p.id !== HUMAN_ID) || [];
 
+    const handleCardClick = (card: any, index: number) => {
+        const success = playCard(card);
+        if (!success && isMyTurn) {
+            setShakingCardIndex(index);
+            setTimeout(() => setShakingCardIndex(null), 400);
+        }
+    };
+
     const handleRematch = () => socket.emit('play_again', settings.roomId);
+
+    // 🧠 LOCAL PREDICTIVE AI (Consultant Mode)
+    const getConsultantRecommendation = () => {
+        if (!isMyTurn || isWaiting || myHand.length === 0) return null;
+
+        // If Attacking
+        if (!isDefending) {
+            const tableRanks = new Set();
+            gameState.round?.attackCards.forEach((c: any) => tableRanks.add(c.rank));
+            gameState.round?.defenceCards.forEach((c: any) => tableRanks.add(c.rank));
+
+            if (tableRanks.size === 0) {
+                return myHand[0]; // Table empty: Play cheapest non-trump
+            } else {
+                // Table has cards: Find the cheapest card matching a rank on the table
+                for (const card of myHand) {
+                    if (tableRanks.has(card.rank)) return card;
+                }
+            }
+        }
+        // If Defending
+        else {
+            const unansweredAttacks = gameState.round?.attackCards.filter((_: any, i: number) => !gameState.round.defenceCards[i]);
+            if (unansweredAttacks && unansweredAttacks.length > 0) {
+                const attackToBeat = unansweredAttacks[0]; // Beat the earliest unanswered attack
+                const trumpSuit = gameState.trumpCard?.suite;
+
+                for (const card of myHand) {
+                    const isTrump = card.suite === trumpSuit;
+                    const attackIsTrump = attackToBeat.suite === trumpSuit;
+
+                    if (!attackIsTrump && isTrump) return card; // Trump beats non-trump
+                    if (card.suite === attackToBeat.suite && card.rank > attackToBeat.rank) return card; // Higher card of same suit
+                }
+            }
+        }
+        return null; // No valid moves found
+    };
+
+    // Only run the algorithm if Consultant Mode (autoPlay) is toggled ON
+    const recommendedCard = settings.autoPlay ? getConsultantRecommendation() : null;
 
     return (
         <div className="flex flex-col h-full gap-4 relative overflow-hidden select-none animate-in fade-in duration-700">
@@ -137,10 +194,10 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                         <div className="flex gap-4 flex-wrap justify-center max-w-[85%] relative z-20">
                             {gameState.round.attackCards.map((atk: any, i: number) => (
                                 <div key={i} className="relative w-14 h-20">
-                                    <PlayingCard card={atk} />
+                                    <PlayingCard card={atk} className="absolute inset-0 shadow-2xl" />
                                     {gameState.round.defenceCards[i] && (
                                         <motion.div initial={{ y: 20, x: 20, opacity: 0 }} animate={{ y: 10, x: 10, opacity: 1 }} className="absolute inset-0 z-10">
-                                            <PlayingCard card={gameState.round.defenceCards[i]} />
+                                            <PlayingCard card={gameState.round.defenceCards[i]} className="shadow-2xl" />
                                         </motion.div>
                                     )}
                                 </div>
@@ -151,8 +208,19 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
 
                 {/* PLAYER INTERACTION */}
                 {!isWaiting && (
-                    <div className="absolute right-6 top-1/2 -translate-y-1/2 z-30">
-                        <button onClick={passOrTake} disabled={!isMyTurn} className={`w-14 h-14 rounded-full border-2 flex items-center justify-center transition-all ${isMyTurn ? 'bg-amber-600 border-amber-400 text-black shadow-xl scale-110 pulse' : 'bg-zinc-900/50 border-white/5 text-zinc-800'}`}>
+                    <div className="absolute right-6 top-1/2 -translate-y-1/2 z-30 flex flex-col items-center gap-2">
+                        {/* Consultant Auto-Play Indicator */}
+                        {settings.autoPlay && isMyTurn && recommendedCard === null && (
+                            <span className="text-[7px] text-amber-500 font-black uppercase tracking-widest animate-pulse">Advise:</span>
+                        )}
+                        <button
+                            onClick={passOrTake}
+                            disabled={!isMyTurn}
+                            className={`w-14 h-14 rounded-full border-2 flex items-center justify-center transition-all ${isMyTurn ?
+                                (settings.autoPlay && recommendedCard === null ? 'bg-amber-600 border-amber-400 text-black shadow-[0_0_20px_rgba(245,158,11,0.6)] scale-110 animate-pulse' : 'bg-amber-600 border-amber-400 text-black shadow-xl scale-110')
+                                : 'bg-zinc-900/50 border-white/5 text-zinc-800'
+                                }`}
+                        >
                             <span className="text-[8px] font-black uppercase rotate-90">{isDefending ? "Take" : "Pass"}</span>
                         </button>
                     </div>
@@ -161,12 +229,27 @@ export default function GameBoard({ settings, onLeave }: { settings: any, onLeav
                 {/* PLAYER HAND AREA */}
                 <div className="flex justify-center -mb-8 px-10 h-32 relative z-30">
                     <div className="flex -space-x-10">
-                        {myHand.map((card: any, i: number) => (
-                            <PlayingCard key={i} card={card} interactive={isMyTurn && !isWaiting}
-                                className={`hover:-translate-y-8 transition-transform ${shakingCardIndex === i ? 'animate-bounce' : ''}`}
-                                onClick={() => { if (!playCard(card) && isMyTurn) { setShakingCardIndex(i); setTimeout(() => setShakingCardIndex(null), 400); } }}
-                            />
-                        ))}
+                        {myHand.map((card: any, i: number) => {
+                            const isRecommended = recommendedCard && card.suite === recommendedCard.suite && card.rank === recommendedCard.rank;
+
+                            return (
+                                <div key={i} className="relative">
+                                    {isRecommended && (
+                                        <div className="absolute inset-0 bg-amber-500 blur-md rounded-lg opacity-60 animate-pulse scale-105" />
+                                    )}
+                                    <PlayingCard
+                                        card={card}
+                                        interactive={isMyTurn && !isWaiting}
+                                        className={`
+                                            hover:-translate-y-8 transition-transform relative z-10
+                                            ${shakingCardIndex === i ? 'animate-bounce' : ''}
+                                            ${isRecommended ? '-translate-y-4 shadow-[0_0_20px_rgba(245,158,11,0.5)]' : ''}
+                                        `}
+                                        onClick={() => { if (!playCard(card) && isMyTurn) { setShakingCardIndex(i); setTimeout(() => setShakingCardIndex(null), 400); } }}
+                                    />
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
             </div>
